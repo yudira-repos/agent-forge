@@ -1,0 +1,25 @@
+Alembic migrations for AgentForge.
+
+Setup:
+    pip install alembic
+    alembic init ui/backend/db/migrations
+
+    # Edit alembic.ini: set sqlalchemy.url = ${DATABASE_URL}
+    # Edit env.py: import Base from ui.backend.db.models
+
+Generate a migration:
+    alembic revision --autogenerate -m "add users table"
+
+Apply migrations:
+    alembic upgrade head
+
+Rollback:
+    alembic downgrade -1
+
+Production deploy:
+    alembic upgrade head   # run before starting the app server
+
+Self-hosted note:
+    Migrations run automatically on first start in development.
+    In production, always run 'alembic upgrade head' as a pre-deploy step
+    or in an init container before the API pod starts.

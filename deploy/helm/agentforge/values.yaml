@@ -1,0 +1,100 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AgentForge Helm Values
+# Override with: helm install agentforge ./deploy/helm/agentforge -f my-values.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/agentforge-oss/agentforge
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+# ── App config ─────────────────────────────────────────────────────────────────
+app:
+  environment: production
+  logLevel: INFO
+  logJson: true
+  prometheusEnabled: true
+  saasMode: false           # true = hosted SaaS, false = self-hosted
+
+# ── Secrets (override in production — use external-secrets or vault) ──────────
+secrets:
+  # Base64-encoded or plain values for the Kubernetes Secret
+  # In production: set via --set secrets.jwtSecretKey=$(cat secret.txt)
+  # or use external-secrets operator to pull from AWS Secrets Manager / Vault
+  jwtSecretKey: "CHANGE_ME"
+  apiKeyPepper: "CHANGE_ME"
+  aiamSigningSecret: "CHANGE_ME"
+  databaseUrl: "postgresql+asyncpg://agentforge:changeme@postgres:5432/agentforge"
+
+# ── Database ───────────────────────────────────────────────────────────────────
+postgresql:
+  enabled: true           # set false to use an external DB
+  auth:
+    username: agentforge
+    password: changeme
+    database: agentforge
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# ── Redis ──────────────────────────────────────────────────────────────────────
+redis:
+  enabled: true
+  auth:
+    password: changeme
+
+# ── Ingress ────────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: agentforge.yourdomain.com
+  tls:
+    enabled: true
+    secretName: agentforge-tls
+
+# ── Resources ──────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+# ── Autoscaling ────────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+
+# ── Notifications ──────────────────────────────────────────────────────────────
+notifications:
+  slack:
+    webhookUrl: ""
+    channel: "#agent-approvals"
+  smtp:
+    host: ""
+    port: 587
+    user: ""
+    from: "agentforge@yourdomain.com"
+  pagerduty:
+    routingKey: ""
+
+# ── Observability ──────────────────────────────────────────────────────────────
+otel:
+  enabled: false
+  endpoint: "http://otel-collector:4317"
+  serviceName: agentforge
+
+# ── Marketplace annotations ────────────────────────────────────────────────────
+# AWS Marketplace
+aws:
+  marketplaceProductCode: ""
+
+# GCP Marketplace
+gcp:
+  marketplaceProductId: ""

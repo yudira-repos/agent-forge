@@ -1,0 +1,21 @@
+apiVersion: v2
+name: agentforge
+description: Open Enterprise Agent Framework — governance, identity, audit, and HITL for AI agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/agentforge-oss/agentforge
+sources:
+  - https://github.com/agentforge-oss/agentforge
+maintainers:
+  - name: AgentForge Contributors
+    url: https://github.com/agentforge-oss/agentforge
+keywords:
+  - ai-agents
+  - governance
+  - enterprise
+  - audit
+  - hitl
+  - llm
+annotations:
+  category: AI Infrastructure
