@@ -38,6 +38,15 @@ from agentforge.registry.registry import SQLiteBackend
 app = FastAPI(title="AgentForge UI", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# ── Health endpoints (liveness + readiness) ───────────────────────────────────
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok", "version": "0.1.0"}
+
+@app.get("/ready")
+def ready() -> dict:
+    return {"status": "ready"}
+
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 # ── Global state (in-memory for demo) ────────────────────────────────────────
@@ -203,6 +212,56 @@ def seed_demo_data() -> None:
 
 
 seed_demo_data()
+
+
+# ── Dev-only seed endpoints ────────────────────────────────────────────────────
+class SeedEventsPayload(BaseModel):
+    events: list[dict[str, Any]]
+
+
+class SeedHITLPayload(BaseModel):
+    requests: list[dict[str, Any]]
+
+
+@app.post("/api/dev/seed-events")
+async def seed_events(payload: SeedEventsPayload) -> dict[str, Any]:
+    """Load audit events from the seed script. Dev/demo only."""
+    created = 0
+    for e in payload.events:
+        try:
+            evt_type = EventType(e["event_type"])
+            severity = EventSeverity(e.get("severity", "info"))
+            audit_logger.log(
+                evt_type,
+                e["agent_id"],
+                e["correlation_id"],
+                payload=e.get("payload", {}),
+                severity=severity,
+            )
+            created += 1
+        except Exception:
+            pass
+    await broadcast({"type": "audit_seeded", "count": created})
+    return {"created": created}
+
+
+@app.post("/api/dev/seed-hitl")
+async def seed_hitl(payload: SeedHITLPayload) -> dict[str, Any]:
+    """Create pending HITL approval requests. Dev/demo only."""
+    created = 0
+    for r in payload.requests:
+        req = ApprovalRequest.create(
+            agent_id=r["agent_id"],
+            correlation_id=r["correlation_id"],
+            action=r["action"],
+            resource=r["resource"],
+            context=r.get("context", {}),
+            timeout_seconds=7200,
+        )
+        hitl_orchestrator._pending[req.request_id] = req
+        created += 1
+    await broadcast({"type": "hitl_seeded", "count": created})
+    return {"created": created}
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────────

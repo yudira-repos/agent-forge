@@ -197,7 +197,7 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
-const API = 'http://localhost:8000/api';
+const API = '/api';
 
 // ── Utils ──────────────────────────────────────────────────────────────────
 function timeAgo(ts) {
@@ -739,7 +739,8 @@ function App() {
   useEffect(() => {
     function connect() {
       try {
-        const ws = new WebSocket('ws://localhost:8000/ws/events');
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/events`);
         ws.onmessage = (msg) => {
           const ev = JSON.parse(msg.data);
           if (ev.type === 'hitl_approved' || ev.type === 'hitl_rejected') {
