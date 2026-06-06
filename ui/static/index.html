@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AgentForge — Enterprise Console</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #22263a; --border: #2e3350;
+    --text: #e8eaf6; --muted: #7b82a8; --blue: #5c7cfa; --blue-dim: #3d5af1;
+    --green: #2dd4bf; --red: #f87171; --orange: #fb923c; --yellow: #facc15;
+    --purple: #a78bfa; --radius: 10px; --sidebar: 220px;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
+
+  /* Sidebar */
+  .sidebar { width: var(--sidebar); background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; position: fixed; top: 0; left: 0; height: 100vh; z-index: 10; }
+  .logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
+  .logo-title { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
+  .logo-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .nav { padding: 12px 0; flex: 1; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 18px;
+    cursor: pointer; font-size: 13px; color: var(--muted); border-radius: 0;
+    transition: all 0.15s; margin: 1px 8px; border-radius: 6px; }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: rgba(92,124,250,0.15); color: var(--blue); }
+  .nav-icon { width: 16px; height: 16px; flex-shrink: 0; }
+  .nav-badge { margin-left: auto; background: var(--red); color: #fff;
+    font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; }
+  .sidebar-footer { padding: 16px 18px; border-top: 1px solid var(--border); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+
+  /* Main */
+  .main { margin-left: var(--sidebar); flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 5; }
+  .topbar-title { font-size: 15px; font-weight: 600; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px;
+    border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: rgba(45,212,191,0.15); color: var(--green); }
+  .badge-red { background: rgba(248,113,113,0.15); color: var(--red); }
+  .badge-orange { background: rgba(251,146,60,0.15); color: var(--orange); }
+  .badge-blue { background: rgba(92,124,250,0.15); color: var(--blue); }
+  .badge-purple { background: rgba(167,139,250,0.15); color: var(--purple); }
+  .badge-gray { background: rgba(123,130,168,0.15); color: var(--muted); }
+
+  .content { padding: 24px 28px; flex: 1; }
+  .page-header { margin-bottom: 22px; }
+  .page-title { font-size: 20px; font-weight: 700; }
+  .page-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* Cards */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .card-header { padding: 16px 20px 0; display: flex; align-items: center; justify-content: space-between; }
+  .card-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .card-body { padding: 16px 20px; }
+  .card-value { font-size: 32px; font-weight: 700; color: var(--text); line-height: 1.1; }
+  .card-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* Grid */
+  .grid { display: grid; gap: 16px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 14px; font-size: 11px; font-weight: 600;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--border); }
+  td { padding: 11px 14px; border-bottom: 1px solid rgba(46,51,80,0.5); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
+    border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;
+    border: none; transition: all 0.15s; }
+  .btn-primary { background: var(--blue); color: #fff; }
+  .btn-primary:hover { background: var(--blue-dim); }
+  .btn-success { background: rgba(45,212,191,0.15); color: var(--green); border: 1px solid rgba(45,212,191,0.3); }
+  .btn-success:hover { background: rgba(45,212,191,0.25); }
+  .btn-danger { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
+  .btn-danger:hover { background: rgba(248,113,113,0.25); }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  /* Form */
+  input, select, textarea {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 12px; border-radius: 6px; font-size: 13px; width: 100%;
+    outline: none; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--blue); }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 5px; font-weight: 500; }
+  .form-group { margin-bottom: 14px; }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    width: 100%; max-width: 480px; }
+  .modal-header { padding: 18px 20px 14px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 15px; font-weight: 600; }
+  .modal-body { padding: 20px; }
+  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .close-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; padding: 2px; }
+  .close-btn:hover { color: var(--text); }
+
+  /* Event row */
+  .event-row { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(46,51,80,0.4); }
+  .event-row:last-child { border-bottom: none; }
+  .event-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+  .event-content { flex: 1; min-width: 0; }
+  .event-type { font-size: 12px; font-weight: 600; }
+  .event-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Agent card */
+  .agent-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px; }
+  .agent-card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
+  .agent-name { font-size: 14px; font-weight: 600; }
+  .agent-id { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: monospace; }
+  .agent-desc { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 12px; }
+  .cap-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .cap-tag { font-size: 11px; padding: 3px 8px; border-radius: 4px;
+    background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+  .cap-tag.hitl { border-color: rgba(251,146,60,0.4); color: var(--orange); background: rgba(251,146,60,0.1); }
+
+  /* HITL card */
+  .hitl-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; margin-bottom: 12px; }
+  .hitl-card.urgent { border-color: rgba(248,113,113,0.4); }
+  .hitl-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .hitl-agent { font-size: 13px; font-weight: 600; }
+  .hitl-action { font-size: 14px; font-weight: 700; margin: 6px 0 4px; }
+  .hitl-resource { font-size: 12px; color: var(--muted); }
+  .context-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+  .ctx-item { background: var(--surface2); border-radius: 6px; padding: 8px 12px; }
+  .ctx-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .ctx-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .hitl-footer { display: flex; gap: 8px; margin-top: 14px; }
+  .timer { font-size: 12px; color: var(--orange); }
+
+  /* Audit */
+  .filter-row { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  .filter-row input, .filter-row select { width: auto; }
+  .replay-step { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(46,51,80,0.4); }
+  .step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--surface2);
+    display: flex; align-items: center; justify-content: center; font-size: 11px;
+    color: var(--muted); flex-shrink: 0; font-weight: 600; }
+  .step-content { flex: 1; }
+  .step-type { font-size: 13px; font-weight: 600; }
+  .step-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Misc */
+  .empty { text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+  .loading { text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+  .section-gap { margin-top: 20px; }
+  .flex { display: flex; }
+  .flex-col { flex-direction: column; }
+  .items-center { align-items: center; }
+  .justify-between { justify-content: space-between; }
+  .gap-2 { gap: 8px; }
+  .gap-3 { gap: 12px; }
+  .mb-1 { margin-bottom: 4px; }
+  .mt-1 { margin-top: 4px; }
+  .text-muted { color: var(--muted); font-size: 12px; }
+  .font-mono { font-family: monospace; font-size: 12px; }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px;
+    font-size: 13px; z-index: 200; animation: slideup 0.2s ease; max-width: 320px; }
+  .toast.success { border-color: rgba(45,212,191,0.4); color: var(--green); }
+  .toast.error { border-color: rgba(248,113,113,0.4); color: var(--red); }
+  @keyframes slideup { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+  @media (max-width: 900px) { .grid-4 { grid-template-columns: repeat(2,1fr); } .grid-3 { grid-template-columns: 1fr; } }
+  @media (max-width: 600px) { .grid-4,.grid-2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+const API = 'http://localhost:8000/api';
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function timeAgo(ts) {
+  const d = Math.floor(Date.now()/1000 - ts);
+  if (d < 60) return `${d}s ago`;
+  if (d < 3600) return `${Math.floor(d/60)}m ago`;
+  if (d < 86400) return `${Math.floor(d/3600)}h ago`;
+  return `${Math.floor(d/86400)}d ago`;
+}
+function fmtTime(ts) {
+  return new Date(ts*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+function severityColor(s) {
+  return {debug:'#7b82a8',info:'#5c7cfa',warning:'#fb923c',error:'#f87171',critical:'#e11d48'}[s] || '#7b82a8';
+}
+function statusBadge(s) {
+  const map = {active:'badge-green',inactive:'badge-gray',deprecated:'badge-red',maintenance:'badge-orange'};
+  return <span className={`badge ${map[s]||'badge-gray'}`}>{s}</span>;
+}
+function adapterBadge(a) {
+  const map = {anthropic:'badge-purple',openai:'badge-green',langchain:'badge-blue',vertex:'badge-orange'};
+  return <span className={`badge ${map[a]||'badge-gray'}`}>{a}</span>;
+}
+async function api(path, opts={}) {
+  const r = await fetch(API+path, {headers:{'Content-Type':'application/json'},...opts});
+  if (!r.ok) { const e=await r.json().catch(()=>({})); throw new Error(e.detail||r.statusText); }
+  return r.json();
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function Toast({msg, type, onClose}) {
+  useEffect(() => { const t=setTimeout(onClose,3000); return ()=>clearTimeout(t); }, []);
+  return <div className={`toast ${type}`}>{msg}</div>;
+}
+
+// ── Icons (inline SVG) ─────────────────────────────────────────────────────
+const Icon = {
+  grid: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
+  agents: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>,
+  hitl: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M9 12l2 2 4-4"/><path d="M21 12c0 5-3.9 9-9 9s-9-4-9-9 3.9-9 9-9 9 4 9 9z"/></svg>,
+  audit: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M9 12h6M9 16h6M9 8h6M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>,
+  check: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path d="M5 13l4 4L19 7"/></svg>,
+  x: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path d="M6 18L18 6M6 6l12 12"/></svg>,
+  refresh: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4 9a8 8 0 0114.2-2.8M20 15a8 8 0 01-14.2 2.8"/></svg>,
+  play: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polygon points="5,3 19,12 5,21"/></svg>,
+};
+
+// ── Dashboard ──────────────────────────────────────────────────────────────
+function Dashboard({hitlCount, onNav}) {
+  const [data, setData] = useState(null);
+  const load = useCallback(() => api('/dashboard').then(setData).catch(console.error), []);
+  useEffect(() => { load(); const t=setInterval(load,10000); return ()=>clearInterval(t); }, []);
+
+  if (!data) return <div className="loading">Loading dashboard…</div>;
+  const {agents, hitl_queue_depth, audit, recent_events, recent_violations, agent_health} = data;
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title">Overview</div>
+        <div className="page-sub">LifeOS Agent System · All agents healthy</div>
+      </div>
+
+      <div className="grid grid-4" style={{marginBottom:20}}>
+        <div className="card"><div className="card-header"><span className="card-title">Total Agents</span></div>
+          <div className="card-body"><div className="card-value">{agents.total}</div>
+          <div className="card-sub">{agents.by_status?.active||0} active · {agents.by_status?.maintenance||0} maintenance</div></div></div>
+
+        <div className="card" style={{cursor:'pointer'}} onClick={()=>onNav('hitl')}>
+          <div className="card-header"><span className="card-title">HITL Queue</span></div>
+          <div className="card-body">
+            <div className="card-value" style={{color: hitl_queue_depth>0 ? 'var(--orange)' : 'var(--green)'}}>{hitl_queue_depth}</div>
+            <div className="card-sub">{hitl_queue_depth>0 ? '⚠ Awaiting your decision' : '✓ All clear'}</div>
+          </div>
+        </div>
+
+        <div className="card"><div className="card-header"><span className="card-title">Total Events</span></div>
+          <div className="card-body"><div className="card-value">{audit.total_events}</div>
+          <div className="card-sub">{audit.violations} violations logged</div></div></div>
+
+        <div className="card"><div className="card-header"><span className="card-title">Violations (24h)</span></div>
+          <div className="card-body"><div className="card-value" style={{color:audit.violations>0?'var(--red)':'var(--green)'}}>{audit.violations}</div>
+          <div className="card-sub">{audit.violations>0 ? 'Review audit trail' : 'No issues'}</div></div></div>
+      </div>
+
+      <div className="grid grid-2" style={{marginBottom:20}}>
+        {/* Recent Activity */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Recent Activity</span>
+            <button className="btn btn-ghost btn-sm" onClick={load}>{Icon.refresh} Refresh</button>
+          </div>
+          <div className="card-body">
+            {recent_events.map(e => (
+              <div className="event-row" key={e.event_id}>
+                <div className="event-dot" style={{background: severityColor(e.severity)}}/>
+                <div className="event-content">
+                  <div className="event-type">{e.event_type.replace('.',  ' › ')}</div>
+                  <div className="event-meta">{e.agent_id} · {timeAgo(e.timestamp)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Violations */}
+        <div className="card">
+          <div className="card-header"><span className="card-title">Recent Violations</span></div>
+          <div className="card-body">
+            {recent_violations.length === 0
+              ? <div className="empty">No violations — governance holding strong ✓</div>
+              : recent_violations.map(e => (
+                <div className="event-row" key={e.event_id}>
+                  <div className="event-dot" style={{background: severityColor(e.severity)}}/>
+                  <div className="event-content">
+                    <div className="event-type" style={{color:'var(--red)'}}>{e.event_type.replace('.', ' › ')}</div>
+                    <div className="event-meta">{e.agent_id} · {e.payload?.reason||e.payload?.attempted||''} · {timeAgo(e.timestamp)}</div>
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+
+      {/* Agent Health Grid */}
+      <div className="card">
+        <div className="card-header"><span className="card-title">Agent Health</span></div>
+        <div className="card-body">
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Agent</th><th>ID</th><th>Runtime</th><th>Status</th><th>Tags</th></tr></thead>
+              <tbody>
+                {agent_health.map(a => (
+                  <tr key={a.agent_id}>
+                    <td style={{fontWeight:600}}>{a.name}</td>
+                    <td className="font-mono" style={{color:'var(--muted)'}}>{a.agent_id}</td>
+                    <td>{adapterBadge(a.adapter)}</td>
+                    <td>{statusBadge(a.status)}</td>
+                    <td>{a.tags.map(t => <span key={t} className="cap-tag" style={{marginRight:4}}>{t}</span>)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Registry ───────────────────────────────────────────────────────────────
+function Registry({onToast}) {
+  const [agents, setAgents] = useState([]);
+  const [showRegister, setShowRegister] = useState(false);
+  const [form, setForm] = useState({agent_id:'',name:'',version:'1.0.0',description:'',owner:'',tags:'',runtime_adapter:'anthropic'});
+
+  const load = useCallback(() => api('/agents').then(setAgents).catch(console.error), []);
+  useEffect(() => { load(); }, []);
+
+  async function handleRegister(e) {
+    e.preventDefault();
+    try {
+      await api('/agents', {method:'POST', body: JSON.stringify({...form, tags: form.tags.split(',').map(t=>t.trim()).filter(Boolean)})});
+      onToast('Agent registered successfully', 'success');
+      setShowRegister(false);
+      setForm({agent_id:'',name:'',version:'1.0.0',description:'',owner:'',tags:'',runtime_adapter:'anthropic'});
+      load();
+    } catch(err) { onToast(err.message, 'error'); }
+  }
+
+  async function handleDeprecate(agent_id, name) {
+    if (!confirm(`Deprecate "${name}"?`)) return;
+    try {
+      await api(`/agents/${agent_id}/deprecate`, {method:'PATCH'});
+      onToast(`${name} deprecated`, 'success');
+      load();
+    } catch(err) { onToast(err.message, 'error'); }
+  }
+
+  return (
+    <div>
+      <div className="page-header flex items-center justify-between">
+        <div>
+          <div className="page-title">Agent Registry</div>
+          <div className="page-sub">{agents.length} agents registered · Capabilities, versions, and runtime adapters</div>
+        </div>
+        <button className="btn btn-primary" onClick={()=>setShowRegister(true)}>+ Register Agent</button>
+      </div>
+
+      <div className="grid grid-3">
+        {agents.map(a => (
+          <div className="agent-card" key={a.agent_id}>
+            <div className="agent-card-header">
+              <div>
+                <div className="agent-name">{a.name}</div>
+                <div className="agent-id">{a.agent_id} · v{a.version}</div>
+              </div>
+              <div style={{display:'flex', gap:6, alignItems:'flex-start'}}>
+                {statusBadge(a.status)}
+              </div>
+            </div>
+            <div className="agent-desc">{a.description}</div>
+            <div style={{marginBottom:10, display:'flex', gap:6, alignItems:'center'}}>
+              {adapterBadge(a.runtime_adapter)}
+              <span className="text-muted">·</span>
+              <span className="text-muted">{a.owner}</span>
+            </div>
+            <div className="cap-list">
+              {(a.capabilities||[]).map(c => (
+                <span key={c.name} className={`cap-tag ${c.requires_hitl?'hitl':''}`} title={c.description}>
+                  {c.requires_hitl ? '👤 ' : ''}{c.name}
+                </span>
+              ))}
+            </div>
+            {a.tags?.length > 0 && (
+              <div style={{marginTop:10, display:'flex', gap:4, flexWrap:'wrap'}}>
+                {a.tags.map(t => <span key={t} className="badge badge-gray" style={{fontSize:10}}>{t}</span>)}
+              </div>
+            )}
+            {a.status === 'active' && (
+              <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={()=>handleDeprecate(a.agent_id, a.name)}>
+                Deprecate
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {showRegister && (
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowRegister(false)}>
+          <div className="modal">
+            <div className="modal-header">
+              <span className="modal-title">Register New Agent</span>
+              <button className="close-btn" onClick={()=>setShowRegister(false)}>×</button>
+            </div>
+            <form onSubmit={handleRegister}>
+              <div className="modal-body">
+                <div className="grid grid-2">
+                  <div className="form-group"><label>Agent ID</label>
+                    <input required placeholder="my-agent-001" value={form.agent_id} onChange={e=>setForm({...form,agent_id:e.target.value})}/></div>
+                  <div className="form-group"><label>Name</label>
+                    <input required placeholder="My Agent" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></div>
+                </div>
+                <div className="grid grid-2">
+                  <div className="form-group"><label>Version</label>
+                    <input required value={form.version} onChange={e=>setForm({...form,version:e.target.value})}/></div>
+                  <div className="form-group"><label>Owner</label>
+                    <input required placeholder="team-name" value={form.owner} onChange={e=>setForm({...form,owner:e.target.value})}/></div>
+                </div>
+                <div className="form-group"><label>Description</label>
+                  <textarea rows={2} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></div>
+                <div className="grid grid-2">
+                  <div className="form-group"><label>Runtime Adapter</label>
+                    <select value={form.runtime_adapter} onChange={e=>setForm({...form,runtime_adapter:e.target.value})}>
+                      <option>anthropic</option><option>openai</option><option>langchain</option><option>vertex</option>
+                    </select></div>
+                  <div className="form-group"><label>Tags (comma-separated)</label>
+                    <input placeholder="finance, nlp" value={form.tags} onChange={e=>setForm({...form,tags:e.target.value})}/></div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-ghost" onClick={()=>setShowRegister(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary">Register</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── HITL Queue ─────────────────────────────────────────────────────────────
+function HITLQueue({onToast, onCountChange}) {
+  const [items, setItems] = useState([]);
+  const [rejectModal, setRejectModal] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  const load = useCallback(() =>
+    api('/hitl/pending').then(d => { setItems(d); onCountChange(d.length); }).catch(console.error), []);
+  useEffect(() => { load(); const t=setInterval(load, 5000); return ()=>clearInterval(t); }, []);
+
+  async function approve(id, action) {
+    try {
+      await api(`/hitl/${id}/approve`, {method:'POST', body: JSON.stringify({reviewer_id:'you@lifeos', reason:'Approved via console'})});
+      onToast(`✓ Approved: ${action}`, 'success');
+      load();
+    } catch(err) { onToast(err.message, 'error'); }
+  }
+
+  async function reject() {
+    if (!rejectReason.trim()) return;
+    try {
+      await api(`/hitl/${rejectModal.request_id}/reject`, {method:'POST', body: JSON.stringify({reviewer_id:'you@lifeos', reason:rejectReason})});
+      onToast(`✗ Rejected: ${rejectModal.action}`, 'error');
+      setRejectModal(null); setRejectReason('');
+      load();
+    } catch(err) { onToast(err.message, 'error'); }
+  }
+
+  function urgency(item) {
+    if (item.escalation_tier === 'l2') return 'HIGH';
+    if (item.escalation_tier === 'l3') return 'CRITICAL';
+    const age = item.age_seconds;
+    if (age > 1800) return 'HIGH';
+    if (age > 600) return 'MEDIUM';
+    return 'LOW';
+  }
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title">HITL Approval Queue</div>
+        <div className="page-sub">
+          {items.length === 0
+            ? 'No pending approvals — your agents are operating within policy'
+            : `${items.length} action${items.length>1?'s':''} waiting for your decision`}
+        </div>
+      </div>
+
+      {items.length === 0 && (
+        <div className="card"><div className="empty" style={{padding:60}}>
+          <div style={{fontSize:32, marginBottom:12}}>✓</div>
+          <div style={{fontWeight:600, color:'var(--green)', marginBottom:6}}>All clear</div>
+          <div>No agents are waiting for your approval right now.</div>
+        </div></div>
+      )}
+
+      {items.map(item => {
+        const urg = urgency(item);
+        const urgColor = {LOW:'var(--blue)',MEDIUM:'var(--orange)',HIGH:'var(--red)',CRITICAL:'var(--red)'}[urg];
+        return (
+          <div className={`hitl-card ${urg==='CRITICAL'||urg==='HIGH' ? 'urgent' : ''}`} key={item.request_id}>
+            <div className="hitl-header">
+              <div>
+                <div style={{display:'flex', alignItems:'center', gap:8}}>
+                  <span className="hitl-agent">{item.agent_id}</span>
+                  <span className="badge badge-gray">{item.reviewer_group}</span>
+                  <span className="badge" style={{background:`rgba(0,0,0,0.2)`,color:urgColor}}>{urg}</span>
+                </div>
+              </div>
+              <div className="timer">⏱ {Math.floor(item.age_seconds/60)}m waiting · Tier {item.escalation_tier?.toUpperCase()}</div>
+            </div>
+
+            <div className="hitl-action">{item.action.replace(/_/g,' ')}</div>
+            <div className="hitl-resource" style={{marginBottom:4}}>Resource: <strong>{item.resource}</strong></div>
+
+            <div className="context-grid">
+              {Object.entries(item.context||{}).map(([k,v]) => (
+                <div className="ctx-item" key={k}>
+                  <div className="ctx-label">{k.replace(/_/g,' ')}</div>
+                  <div className="ctx-value">{typeof v==='number' && k.includes('usd') ? `$${Number(v).toLocaleString()}` : String(v)}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="hitl-footer">
+              <button className="btn btn-success" onClick={()=>approve(item.request_id, item.action)}>
+                {Icon.check} Approve
+              </button>
+              <button className="btn btn-danger" onClick={()=>{setRejectModal(item);setRejectReason('');}}>
+                {Icon.x} Reject
+              </button>
+              <span className="text-muted" style={{marginLeft:'auto', alignSelf:'center'}}>
+                Expires {timeAgo(item.expires_at - 99999)} · Run: <span className="font-mono">{item.correlation_id}</span>
+              </span>
+            </div>
+          </div>
+        );
+      })}
+
+      {rejectModal && (
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setRejectModal(null)}>
+          <div className="modal">
+            <div className="modal-header">
+              <span className="modal-title">Reject: {rejectModal.action.replace(/_/g,' ')}</span>
+              <button className="close-btn" onClick={()=>setRejectModal(null)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div style={{background:'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.2)', borderRadius:6, padding:'10px 14px', marginBottom:14, fontSize:13}}>
+                You are rejecting <strong>{rejectModal.action.replace(/_/g,' ')}</strong> requested by <strong>{rejectModal.agent_id}</strong>.
+                The agent will be blocked from executing this action.
+              </div>
+              <div className="form-group"><label>Reason (required)</label>
+                <textarea rows={3} placeholder="e.g. Incorrect payee — that's my landlord, not suspicious" value={rejectReason} onChange={e=>setRejectReason(e.target.value)} autoFocus/>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={()=>setRejectModal(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={reject} disabled={!rejectReason.trim()}>Confirm Reject</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Audit Trail ────────────────────────────────────────────────────────────
+function AuditTrail({onToast}) {
+  const [data, setData] = useState(null);
+  const [filters, setFilters] = useState({agent_id:'', severity:'', correlation_id:''});
+  const [replay, setReplay] = useState(null);
+  const [expanded, setExpanded] = useState(null);
+
+  const load = useCallback(() => {
+    const params = new URLSearchParams();
+    if (filters.agent_id) params.set('agent_id', filters.agent_id);
+    if (filters.severity) params.set('severity', filters.severity);
+    if (filters.correlation_id) params.set('correlation_id', filters.correlation_id);
+    api(`/audit?${params}`).then(setData).catch(console.error);
+  }, [filters]);
+
+  useEffect(() => { load(); }, [filters]);
+
+  async function loadReplay(corr_id) {
+    try {
+      const r = await api(`/audit/${corr_id}/replay`);
+      setReplay(r);
+    } catch(e) { onToast('Could not load replay', 'error'); }
+  }
+
+  const events = data?.events || [];
+  const stats = data?.stats || {};
+
+  // Unique correlation ids for quick filter
+  const corrIds = [...new Set(events.map(e=>e.correlation_id))].slice(0,8);
+
+  return (
+    <div>
+      <div className="page-header flex items-center justify-between">
+        <div>
+          <div className="page-title">Audit Trail</div>
+          <div className="page-sub">{stats.total_events||0} total events · Tamper-evident chained log</div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}>{Icon.refresh} Refresh</button>
+      </div>
+
+      <div className="filter-row">
+        <input style={{width:180}} placeholder="Filter by agent ID" value={filters.agent_id}
+          onChange={e=>setFilters({...filters,agent_id:e.target.value})}/>
+        <select style={{width:140}} value={filters.severity} onChange={e=>setFilters({...filters,severity:e.target.value})}>
+          <option value="">All severities</option>
+          <option value="debug">Debug+</option>
+          <option value="info">Info+</option>
+          <option value="warning">Warning+</option>
+          <option value="error">Error+</option>
+        </select>
+        <select style={{width:220}} value={filters.correlation_id} onChange={e=>setFilters({...filters,correlation_id:e.target.value})}>
+          <option value="">All runs</option>
+          {corrIds.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+        {(filters.agent_id||filters.severity||filters.correlation_id) &&
+          <button className="btn btn-ghost btn-sm" onClick={()=>setFilters({agent_id:'',severity:'',correlation_id:''})}>Clear</button>}
+      </div>
+
+      <div className="grid grid-2">
+        <div className="card" style={{gridColumn: replay ? '1' : '1/-1'}}>
+          <div className="card-body" style={{padding:0}}>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Time</th><th>Event</th><th>Agent</th><th>Severity</th><th>Run</th><th></th></tr></thead>
+                <tbody>
+                  {events.map(e=>(
+                    <tr key={e.event_id} style={{cursor:'pointer'}} onClick={()=>setExpanded(expanded===e.event_id?null:e.event_id)}>
+                      <td style={{color:'var(--muted)', width:70}}>{fmtTime(e.timestamp)}</td>
+                      <td style={{fontWeight:500}}>{e.event_type.replace(/\./g,' › ')}</td>
+                      <td className="font-mono" style={{color:'var(--muted)'}}>{e.agent_id}</td>
+                      <td><span className="badge" style={{background:`${severityColor(e.severity)}22`, color:severityColor(e.severity)}}>{e.severity}</span></td>
+                      <td className="font-mono" style={{fontSize:11, color:'var(--muted)', maxWidth:120, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{e.correlation_id}</td>
+                      <td>
+                        <button className="btn btn-ghost btn-sm" onClick={ev=>{ev.stopPropagation();loadReplay(e.correlation_id);}}>
+                          {Icon.play}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {events.length===0 && <tr><td colSpan={6}><div className="empty">No events match your filters</div></td></tr>}
+                </tbody>
+              </table>
+            </div>
+
+            {expanded && (() => {
+              const e = events.find(ev=>ev.event_id===expanded);
+              return e ? (
+                <div style={{padding:'14px 20px', background:'var(--surface2)', borderTop:'1px solid var(--border)'}}>
+                  <div style={{marginBottom:8, fontWeight:600, fontSize:12}}>Event Payload</div>
+                  <pre style={{fontSize:12, color:'var(--text)', overflow:'auto', maxHeight:150}}>{JSON.stringify(e.payload, null, 2)}</pre>
+                  {e.previous_event_id && <div style={{marginTop:8, fontSize:11, color:'var(--muted)'}}>⛓ Chained from: <span className="font-mono">{e.previous_event_id}</span></div>}
+                </div>
+              ) : null;
+            })()}
+          </div>
+        </div>
+
+        {replay && (
+          <div className="card">
+            <div className="card-header">
+              <span className="card-title">Run Replay</span>
+              <button className="close-btn" onClick={()=>setReplay(null)}>×</button>
+            </div>
+            <div className="card-body">
+              <div className="font-mono" style={{fontSize:11, color:'var(--muted)', marginBottom:12}}>{replay.correlation_id}</div>
+              {replay.steps.map(s=>(
+                <div className="replay-step" key={s.step}>
+                  <div className="step-num">{s.step}</div>
+                  <div className="step-content">
+                    <div className="step-type" style={{color:severityColor(s.severity)}}>{s.type.replace(/\./g,' › ')}</div>
+                    <div className="step-meta">{s.agent} · {fmtTime(s.timestamp)}</div>
+                    {Object.keys(s.payload||{}).length > 0 &&
+                      <div style={{fontSize:11, color:'var(--muted)', marginTop:3}}>
+                        {Object.entries(s.payload).slice(0,3).map(([k,v])=>`${k}: ${v}`).join(' · ')}
+                      </div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── App Shell ──────────────────────────────────────────────────────────────
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [hitlCount, setHitlCount] = useState(0);
+  const [toast, setToast] = useState(null);
+  const wsRef = useRef(null);
+
+  // Load initial HITL count
+  useEffect(() => {
+    api('/hitl/pending').then(d=>setHitlCount(d.length)).catch(()=>{});
+  }, []);
+
+  // WebSocket for real-time events
+  useEffect(() => {
+    function connect() {
+      try {
+        const ws = new WebSocket('ws://localhost:8000/ws/events');
+        ws.onmessage = (msg) => {
+          const ev = JSON.parse(msg.data);
+          if (ev.type === 'hitl_approved' || ev.type === 'hitl_rejected') {
+            api('/hitl/pending').then(d=>setHitlCount(d.length)).catch(()=>{});
+          }
+        };
+        ws.onclose = () => setTimeout(connect, 3000);
+        wsRef.current = ws;
+      } catch(e) {}
+    }
+    connect();
+    return () => wsRef.current?.close();
+  }, []);
+
+  function showToast(msg, type='success') {
+    setToast({msg, type, id: Date.now()});
+  }
+
+  const pages = [
+    {id:'dashboard', label:'Dashboard', icon:Icon.grid},
+    {id:'registry', label:'Agent Registry', icon:Icon.agents},
+    {id:'hitl', label:'Approvals', icon:Icon.hitl, badge: hitlCount > 0 ? hitlCount : null},
+    {id:'audit', label:'Audit Trail', icon:Icon.audit},
+  ];
+
+  return (
+    <>
+      <div className="sidebar">
+        <div className="logo">
+          <div className="logo-title">⬡ AgentForge</div>
+          <div className="logo-sub">Enterprise Console</div>
+        </div>
+        <nav className="nav">
+          {pages.map(p=>(
+            <div key={p.id} className={`nav-item ${page===p.id?'active':''}`} onClick={()=>setPage(p.id)}>
+              {p.icon} {p.label}
+              {p.badge && <span className="nav-badge">{p.badge}</span>}
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div style={{fontSize:12, color:'var(--muted)'}}>
+            <span className="status-dot"/>LifeOS · Connected
+          </div>
+          <div style={{fontSize:11, color:'var(--muted)', marginTop:6}}>AgentForge v0.1.0</div>
+        </div>
+      </div>
+
+      <div className="main">
+        <div className="topbar">
+          <div className="topbar-title">
+            {pages.find(p=>p.id===page)?.label}
+          </div>
+          <div className="topbar-right">
+            {hitlCount > 0 &&
+              <button className="btn btn-danger btn-sm" onClick={()=>setPage('hitl')}>
+                ⚠ {hitlCount} Approval{hitlCount>1?'s':''} Pending
+              </button>
+            }
+            <span className="badge badge-green">SOC2 Profile Active</span>
+          </div>
+        </div>
+        <div className="content">
+          {page === 'dashboard' && <Dashboard hitlCount={hitlCount} onNav={setPage}/>}
+          {page === 'registry' && <Registry onToast={showToast}/>}
+          {page === 'hitl' && <HITLQueue onToast={showToast} onCountChange={setHitlCount}/>}
+          {page === 'audit' && <AuditTrail onToast={showToast}/>}
+        </div>
+      </div>
+
+      {toast && <Toast key={toast.id} msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentforge"
+version = "0.1.0"
+description = "Open Enterprise Agent Framework — identity, governance, audit, and HITL for AI agents"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+keywords = [
+    "agents", "ai", "enterprise", "governance", "audit",
+    "hitl", "llm", "anthropic", "openai", "langchain", "vertex",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+# Core has zero mandatory dependencies — all LLM SDKs are optional
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.30"]
+openai = ["openai>=1.30"]
+langchain = ["langchain-core>=0.2", "langchain-openai>=0.1"]
+vertex = ["google-cloud-aiplatform>=1.60"]
+all = [
+    "anthropic>=0.30",
+    "openai>=1.30",
+    "langchain-core>=0.2",
+    "langchain-openai>=0.1",
+    "google-cloud-aiplatform>=1.60",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "coverage[toml]>=7.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/agentforge-oss/agentforge"
+Documentation = "https://agentforge.readthedocs.io"
+Repository = "https://github.com/agentforge-oss/agentforge"
+"Bug Tracker" = "https://github.com/agentforge-oss/agentforge/issues"
+Changelog = "https://github.com/agentforge-oss/agentforge/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentforge*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["agentforge"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]
