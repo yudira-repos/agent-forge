@@ -1,6 +1,9 @@
-# Railway deployment config — use the production Dockerfile instead of Railpack auto-detect.
-# The FastAPI app lives at ui/backend/main.py (not project root), so Railpack cannot
-# infer a start command on its own.
+# Railway deployment — Dockerfile builder (FastAPI app is at ui/backend/main.py).
+#
+# Networking fix for 502 "Application failed to respond":
+#   1. agentforge → Variables → set PORT=8000 (or delete PORT and use Railway default)
+#   2. Settings → Networking → edit domain → target port MUST match PORT (use 8000, not 80)
+#   3. Redeploy, then: curl https://YOUR-DOMAIN.up.railway.app/health
 
 [build]
 builder = "DOCKERFILE"
@@ -8,6 +11,4 @@ dockerfilePath = "deploy/docker/Dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
-healthcheckTimeout = 300
-# Public domain target port must be 8000 (see Railway → Settings → Networking).
-# Also set service variable PORT=8000 — do NOT use port 80 (non-root container).
+healthcheckTimeout = 120
