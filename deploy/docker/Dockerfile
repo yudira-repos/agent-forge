@@ -51,11 +51,12 @@ COPY ui/ ./ui/
 RUN useradd -m -u 1001 agentforge && chown -R agentforge:agentforge /app
 USER agentforge
 
-# Health check
+# Health check (must match the port uvicorn binds to)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD sh -c 'curl -f "http://localhost:${PORT:-8000}/health" || exit 1'
 
 EXPOSE 8000
 
-# Start the server (Alembic runs automatically in production via init container)
-CMD ["sh", "-c", "uvicorn ui.backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"]
+# Railway: set PORT=8000 and map the public domain target port to 8000 (not 80).
+# Port 80 requires root; this image runs as non-root user agentforge.
+CMD ["sh", "-c", "uvicorn ui.backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WORKERS:-1}"]

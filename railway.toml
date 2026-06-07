@@ -9,3 +9,5 @@ dockerfilePath = "deploy/docker/Dockerfile"
 [deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 300
+# Public domain target port must be 8000 (see Railway → Settings → Networking).
+# Also set service variable PORT=8000 — do NOT use port 80 (non-root container).
