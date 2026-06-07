@@ -199,13 +199,41 @@
 const { useState, useEffect, useCallback, useRef } = React;
 const API = '/api';
 
+// ── RBAC permission helper ─────────────────────────────────────────────────
+const ROLE_RANK = {viewer:0, operator:1, supervisor:2, admin:3};
+function can(user, action) {
+  const rank = ROLE_RANK[user?.role] ?? 0;
+  const rules = {
+    view_hitl:       rank >= 2,   // supervisor+
+    approve_hitl:    rank >= 2,
+    register_agent:  rank >= 3,   // admin only
+    deprecate_agent: rank >= 3,
+    export_audit:    rank >= 2,
+    view_violations: rank >= 1,   // operator+
+  };
+  return rules[action] ?? true;   // default allow for read actions
+}
+
+function AccessDenied({role, required}) {
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'60vh',gap:12}}>
+      <div style={{fontSize:40}}>🔒</div>
+      <div style={{fontSize:18,fontWeight:700,color:'var(--text)'}}>Access Restricted</div>
+      <div style={{fontSize:13,color:'var(--muted)',textAlign:'center',maxWidth:320}}>
+        Your role <span className="badge badge-gray">{role}</span> cannot access this section.
+        <br/>Required: <span className="badge badge-blue">{required}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Auth token storage ─────────────────────────────────────────────────────
 const TokenStore = {
-  get: () => sessionStorage.getItem('af_token'),
-  set: (t) => sessionStorage.setItem('af_token', t),
-  clear: () => sessionStorage.removeItem('af_token'),
-  user: () => { try { return JSON.parse(sessionStorage.getItem('af_user')||'null'); } catch{ return null; } },
-  setUser: (u) => sessionStorage.setItem('af_user', JSON.stringify(u)),
+  get: () => { try { return sessionStorage.getItem('af_token'); } catch(e) { return null; } },
+  set: (t) => { try { sessionStorage.setItem('af_token', t); } catch(e) {} },
+  clear: () => { try { sessionStorage.removeItem('af_token'); sessionStorage.removeItem('af_user'); } catch(e) {} },
+  user: () => { try { const u = sessionStorage.getItem('af_user'); return u ? JSON.parse(u) : null; } catch(e) { return null; } },
+  setUser: (u) => { try { sessionStorage.setItem('af_user', JSON.stringify(u)); } catch(e) {} },
 };
 
 // ── Utils ──────────────────────────────────────────────────────────────────
@@ -362,7 +390,7 @@ function Dashboard({hitlCount, onNav}) {
 }
 
 // ── Registry ───────────────────────────────────────────────────────────────
-function Registry({onToast}) {
+function Registry({onToast, user}) {
   const [agents, setAgents] = useState([]);
   const [showRegister, setShowRegister] = useState(false);
   const [form, setForm] = useState({agent_id:'',name:'',version:'1.0.0',description:'',owner:'',tags:'',runtime_adapter:'anthropic'});
@@ -397,7 +425,8 @@ function Registry({onToast}) {
           <div className="page-title">Agent Registry</div>
           <div className="page-sub">{agents.length} agents registered · Capabilities, versions, and runtime adapters</div>
         </div>
-        <button className="btn btn-primary" onClick={()=>setShowRegister(true)}>+ Register Agent</button>
+        {can(user,'register_agent') &&
+          <button className="btn btn-primary" onClick={()=>setShowRegister(true)}>+ Register Agent</button>}
       </div>
 
       <div className="grid grid-3">
@@ -430,7 +459,7 @@ function Registry({onToast}) {
                 {a.tags.map(t => <span key={t} className="badge badge-gray" style={{fontSize:10}}>{t}</span>)}
               </div>
             )}
-            {a.status === 'active' && (
+            {a.status === 'active' && can(user,'deprecate_agent') && (
               <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={()=>handleDeprecate(a.agent_id, a.name)}>
                 Deprecate
               </button>
@@ -484,7 +513,8 @@ function Registry({onToast}) {
 }
 
 // ── HITL Queue ─────────────────────────────────────────────────────────────
-function HITLQueue({onToast, onCountChange}) {
+function HITLQueue({onToast, onCountChange, user}) {
+  if (!can(user, 'view_hitl')) return <AccessDenied role={user?.role} required="supervisor or admin"/>;
   const [items, setItems] = useState([]);
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -568,12 +598,15 @@ function HITLQueue({onToast, onCountChange}) {
             </div>
 
             <div className="hitl-footer">
+              {can(user,'approve_hitl') && <>
               <button className="btn btn-success" onClick={()=>approve(item.request_id, item.action)}>
                 {Icon.check} Approve
               </button>
               <button className="btn btn-danger" onClick={()=>{setRejectModal(item);setRejectReason('');}}>
                 {Icon.x} Reject
               </button>
+              </>}
+              {!can(user,'approve_hitl') && <span className="badge badge-gray">👁 View only — supervisor role required to approve</span>}
               <span className="text-muted" style={{marginLeft:'auto', alignSelf:'center'}}>
                 Expires {timeAgo(item.expires_at - 99999)} · Run: <span className="font-mono">{item.correlation_id}</span>
               </span>
@@ -610,7 +643,7 @@ function HITLQueue({onToast, onCountChange}) {
 }
 
 // ── Audit Trail ────────────────────────────────────────────────────────────
-function AuditTrail({onToast}) {
+function AuditTrail({onToast, user}) {
   const [data, setData] = useState(null);
   const [filters, setFilters] = useState({agent_id:'', severity:'', correlation_id:''});
   const [replay, setReplay] = useState(null);
@@ -646,7 +679,13 @@ function AuditTrail({onToast}) {
           <div className="page-title">Audit Trail</div>
           <div className="page-sub">{stats.total_events||0} total events · Tamper-evident chained log</div>
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={load}>{Icon.refresh} Refresh</button>
+        <div style={{display:'flex',gap:8}}>
+          {can(user,'export_audit') &&
+            <a className="btn btn-ghost btn-sm" href="/api/audit/export?format=csv" download>
+              ↓ Export CSV
+            </a>}
+          <button className="btn btn-ghost btn-sm" onClick={load}>{Icon.refresh} Refresh</button>
+        </div>
       </div>
 
       <div className="filter-row">
@@ -743,10 +782,10 @@ function LoginScreen({onLogin}) {
   const [loading, setLoading] = useState(false);
 
   const DEMO_ACCOUNTS = [
-    {email:'admin@agentforge.io',   role:'Admin',    desc:'Full access'},
-    {email:'cto@acme.io',           role:'Admin',    desc:'CTO demo account'},
-    {email:'auditor@acme.io',       role:'Supervisor',desc:'Approve HITL, view audit'},
-    {email:'viewer@acme.io',        role:'Viewer',   desc:'Read-only access'},
+    {email:'admin@agentforge.io',  role:'Admin',      desc:'Register agents, full HITL, audit export'},
+    {email:'cto@acme.io',          role:'Admin',      desc:'CTO sandbox — try everything'},
+    {email:'auditor@acme.io',      role:'Supervisor', desc:'Approve/reject HITL, export audit, read registry'},
+    {email:'viewer@acme.io',       role:'Viewer',     desc:'Dashboard + registry + audit — read only'},
   ];
 
   async function handleLogin(e) {
@@ -756,15 +795,18 @@ function LoginScreen({onLogin}) {
       const r = await fetch('/api/auth/login', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({email, password}),
+        body: JSON.stringify({email: email.trim().toLowerCase(), password}),
       });
-      if (!r.ok) { const d=await r.json(); throw new Error(d.detail||'Login failed'); }
       const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Invalid email or password');
+      if (!data.access_token) throw new Error('No token returned from server');
       TokenStore.set(data.access_token);
-      TokenStore.setUser(data.user);
-      onLogin(data.user);
-    } catch(err) { setError(err.message); }
-    finally { setLoading(false); }
+      TokenStore.setUser(data.user || {email, role:'viewer', name: email});
+      onLogin(data.user || {email, role:'viewer', name: email});
+    } catch(err) {
+      setError(err.message);
+      setLoading(false);
+    }
   }
 
   return (
@@ -820,22 +862,12 @@ function LoginScreen({onLogin}) {
   );
 }
 
-// ── App Shell ──────────────────────────────────────────────────────────────
-function App() {
-  const [user, setUser] = useState(() => TokenStore.user());
+// ── Authenticated shell (all hooks live here, never conditionally) ──────────
+function AuthenticatedApp({user, onLogout}) {
   const [page, setPage] = useState('dashboard');
   const [hitlCount, setHitlCount] = useState(0);
   const [toast, setToast] = useState(null);
   const wsRef = useRef(null);
-
-  function handleLogin(u) { setUser(u); }
-  function handleLogout() {
-    fetch('/api/auth/logout', {method:'POST'});
-    TokenStore.clear();
-    setUser(null);
-  }
-
-  if (!user) return <LoginScreen onLogin={handleLogin}/>;
 
   // Load initial HITL count
   useEffect(() => {
@@ -869,7 +901,7 @@ function App() {
   const pages = [
     {id:'dashboard', label:'Dashboard', icon:Icon.grid},
     {id:'registry', label:'Agent Registry', icon:Icon.agents},
-    {id:'hitl', label:'Approvals', icon:Icon.hitl, badge: hitlCount > 0 ? hitlCount : null},
+    ...(can(user,'view_hitl') ? [{id:'hitl', label:'Approvals', icon:Icon.hitl, badge: hitlCount > 0 ? hitlCount : null}] : []),
     {id:'audit', label:'Audit Trail', icon:Icon.audit},
   ];
 
@@ -897,7 +929,7 @@ function App() {
               <div style={{fontSize:12,fontWeight:600,color:'var(--text)'}}>{user?.name||user?.email}</div>
               <div style={{fontSize:11,color:'var(--muted)'}}>{user?.role}</div>
             </div>
-            <button className="btn btn-ghost btn-sm" onClick={handleLogout} title="Sign out"
+            <button className="btn btn-ghost btn-sm" onClick={onLogout} title="Sign out"
               style={{padding:'4px 8px',fontSize:11}}>
               Sign out
             </button>
@@ -911,7 +943,7 @@ function App() {
             {pages.find(p=>p.id===page)?.label}
           </div>
           <div className="topbar-right">
-            {hitlCount > 0 &&
+            {hitlCount > 0 && can(user,'view_hitl') &&
               <button className="btn btn-danger btn-sm" onClick={()=>setPage('hitl')}>
                 ⚠ {hitlCount} Approval{hitlCount>1?'s':''} Pending
               </button>
@@ -920,16 +952,34 @@ function App() {
           </div>
         </div>
         <div className="content">
-          {page === 'dashboard' && <Dashboard hitlCount={hitlCount} onNav={setPage}/>}
-          {page === 'registry' && <Registry onToast={showToast}/>}
-          {page === 'hitl' && <HITLQueue onToast={showToast} onCountChange={setHitlCount}/>}
-          {page === 'audit' && <AuditTrail onToast={showToast}/>}
+          {page === 'dashboard' && <Dashboard hitlCount={hitlCount} onNav={setPage} user={user}/>}
+          {page === 'registry' && <Registry onToast={showToast} user={user}/>}
+          {page === 'hitl' && <HITLQueue onToast={showToast} onCountChange={setHitlCount} user={user}/>}
+          {page === 'audit' && <AuditTrail onToast={showToast} user={user}/>}
         </div>
       </div>
 
       {toast && <Toast key={toast.id} msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
     </>
   );
+}
+
+// ── App root — only one hook here, no conditional hook calls ──────────────
+function App() {
+  const [user, setUser] = useState(() => TokenStore.user());
+
+  function handleLogin(u) {
+    setUser(u);
+  }
+
+  function handleLogout() {
+    try { fetch('/api/auth/logout', {method:'POST'}); } catch(e) {}
+    TokenStore.clear();
+    setUser(null);
+  }
+
+  if (!user) return <LoginScreen onLogin={handleLogin}/>;
+  return <AuthenticatedApp user={user} onLogout={handleLogout}/>;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
