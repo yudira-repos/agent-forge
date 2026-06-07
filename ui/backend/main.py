@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from agentforge.aiam import AgentIdentity, RBACPolicy, Permission
 from agentforge.audit import AuditLogger, AuditQuery, AuditTrail, EventSeverity, EventType
 from agentforge.audit.logger import InMemoryAuditSink
+from ui.backend.notifications.slack import slack_notify
 from agentforge.governance import PolicyContext, SOC2Profile
 from agentforge.hitl import ApprovalDecision, ApprovalRequest, ApprovalStatus, EscalationPolicy, HITLOrchestrator
 from agentforge.registry import AgentCapability, AgentManifest, AgentRegistry, AgentStatus
@@ -57,6 +58,7 @@ audit_trail = AuditTrail(audit_sink)
 gov_engine = SOC2Profile.engine()
 hitl_orchestrator = HITLOrchestrator(
     escalation_policy=EscalationPolicy.standard(),
+    notify=slack_notify,   # real Slack notifications
     poll_interval=5.0,
 )
 
@@ -212,6 +214,80 @@ def seed_demo_data() -> None:
 
 
 seed_demo_data()
+
+
+# ── Auth — demo user store ─────────────────────────────────────────────────────
+import hashlib, hmac as _hmac
+
+# In-memory user store for demo (replace with DB in production)
+# Format: email → {name, role, password_hash}
+_USERS: dict[str, dict] = {}
+
+def _hash_pw(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def _seed_users() -> None:
+    """Pre-seed demo accounts shown on the login screen."""
+    _USERS["admin@agentforge.io"]    = {"name": "Ravi (Admin)",      "role": "admin",      "hash": _hash_pw("demo1234")}
+    _USERS["cto@acme.io"]            = {"name": "CTO Demo Account",  "role": "admin",      "hash": _hash_pw("demo1234")}
+    _USERS["auditor@acme.io"]        = {"name": "Compliance Auditor","role": "supervisor", "hash": _hash_pw("demo1234")}
+    _USERS["viewer@acme.io"]         = {"name": "Read-Only Viewer",  "role": "viewer",     "hash": _hash_pw("demo1234")}
+
+_seed_users()
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
+
+import base64 as _b64, json as _json, time as _time
+
+def _make_token(email: str, role: str, name: str) -> str:
+    """Lightweight signed token (no python-jose dependency needed for demo)."""
+    import hmac as _h, hashlib as _hs
+    payload = {"sub": email, "role": role, "name": name, "exp": _time.time() + 86400 * 7}
+    data = _b64.urlsafe_b64encode(_json.dumps(payload).encode()).decode()
+    sig  = _h.new(b"agentforge-demo-secret", data.encode(), _hs.sha256).hexdigest()[:16]
+    return f"{data}.{sig}"
+
+def _verify_token(token: str) -> dict | None:
+    import hmac as _h, hashlib as _hs
+    try:
+        data, sig = token.rsplit(".", 1)
+        expected = _h.new(b"agentforge-demo-secret", data.encode(), _hs.sha256).hexdigest()[:16]
+        if not _h.compare_digest(sig, expected):
+            return None
+        payload = _json.loads(_b64.urlsafe_b64decode(data + "=="))
+        if payload.get("exp", 0) < _time.time():
+            return None
+        return payload
+    except Exception:
+        return None
+
+@app.post("/api/auth/login")
+def login(payload: LoginPayload) -> dict:
+    user = _USERS.get(payload.email.lower())
+    if not user or user["hash"] != _hash_pw(payload.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = _make_token(payload.email, user["role"], user["name"])
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {"email": payload.email, "name": user["name"], "role": user["role"]},
+    }
+
+@app.get("/api/auth/me")
+def me(authorization: str | None = None) -> dict:
+    from fastapi import Header
+    return {"status": "ok"}
+
+@app.post("/api/auth/logout")
+def logout() -> dict:
+    return {"status": "logged_out"}
 
 
 # ── Dev-only seed endpoints ────────────────────────────────────────────────────

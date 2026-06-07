@@ -199,6 +199,15 @@
 const { useState, useEffect, useCallback, useRef } = React;
 const API = '/api';
 
+// ── Auth token storage ─────────────────────────────────────────────────────
+const TokenStore = {
+  get: () => sessionStorage.getItem('af_token'),
+  set: (t) => sessionStorage.setItem('af_token', t),
+  clear: () => sessionStorage.removeItem('af_token'),
+  user: () => { try { return JSON.parse(sessionStorage.getItem('af_user')||'null'); } catch{ return null; } },
+  setUser: (u) => sessionStorage.setItem('af_user', JSON.stringify(u)),
+};
+
 // ── Utils ──────────────────────────────────────────────────────────────────
 function timeAgo(ts) {
   const d = Math.floor(Date.now()/1000 - ts);
@@ -222,7 +231,10 @@ function adapterBadge(a) {
   return <span className={`badge ${map[a]||'badge-gray'}`}>{a}</span>;
 }
 async function api(path, opts={}) {
-  const r = await fetch(API+path, {headers:{'Content-Type':'application/json'},...opts});
+  const token = TokenStore.get();
+  const headers = {'Content-Type':'application/json', ...(token ? {'Authorization':`Bearer ${token}`} : {})};
+  const r = await fetch(API+path, {headers, ...opts});
+  if (r.status === 401) { TokenStore.clear(); window.location.reload(); return; }
   if (!r.ok) { const e=await r.json().catch(()=>({})); throw new Error(e.detail||r.statusText); }
   return r.json();
 }
@@ -723,12 +735,107 @@ function AuditTrail({onToast}) {
   );
 }
 
+// ── Login Screen ───────────────────────────────────────────────────────────
+function LoginScreen({onLogin}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const DEMO_ACCOUNTS = [
+    {email:'admin@agentforge.io',   role:'Admin',    desc:'Full access'},
+    {email:'cto@acme.io',           role:'Admin',    desc:'CTO demo account'},
+    {email:'auditor@acme.io',       role:'Supervisor',desc:'Approve HITL, view audit'},
+    {email:'viewer@acme.io',        role:'Viewer',   desc:'Read-only access'},
+  ];
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setLoading(true); setError('');
+    try {
+      const r = await fetch('/api/auth/login', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({email, password}),
+      });
+      if (!r.ok) { const d=await r.json(); throw new Error(d.detail||'Login failed'); }
+      const data = await r.json();
+      TokenStore.set(data.access_token);
+      TokenStore.setUser(data.user);
+      onLogin(data.user);
+    } catch(err) { setError(err.message); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{width:'100%',maxWidth:420}}>
+        {/* Logo */}
+        <div style={{textAlign:'center',marginBottom:32}}>
+          <div style={{fontSize:28,fontWeight:800,color:'var(--text)',marginBottom:6}}>⬡ AgentForge</div>
+          <div style={{fontSize:13,color:'var(--muted)'}}>Enterprise Console</div>
+        </div>
+
+        {/* Login card */}
+        <div className="card" style={{padding:28}}>
+          <div style={{fontSize:17,fontWeight:700,marginBottom:4}}>Sign in</div>
+          <div style={{fontSize:13,color:'var(--muted)',marginBottom:22}}>Use a demo account below or enter your credentials.</div>
+
+          {error && <div style={{background:'rgba(248,113,113,0.1)',border:'1px solid rgba(248,113,113,0.3)',borderRadius:6,padding:'10px 14px',color:'var(--red)',fontSize:13,marginBottom:16}}>{error}</div>}
+
+          <form onSubmit={handleLogin}>
+            <div className="form-group">
+              <label>Email</label>
+              <input type="email" required placeholder="you@company.com" value={email} onChange={e=>setEmail(e.target.value)} autoFocus/>
+            </div>
+            <div className="form-group">
+              <label>Password</label>
+              <input type="password" required placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)}/>
+            </div>
+            <button type="submit" className="btn btn-primary" style={{width:'100%',justifyContent:'center',padding:'10px',marginTop:4}} disabled={loading}>
+              {loading ? 'Signing in…' : 'Sign in →'}
+            </button>
+          </form>
+        </div>
+
+        {/* Demo accounts */}
+        <div style={{marginTop:20}}>
+          <div style={{fontSize:11,color:'var(--muted)',textAlign:'center',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}}>
+            Demo accounts — password: <span style={{color:'var(--text)',fontFamily:'monospace'}}>demo1234</span>
+          </div>
+          {DEMO_ACCOUNTS.map(a=>(
+            <div key={a.email}
+              style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',marginBottom:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between'}}
+              onClick={()=>{setEmail(a.email);setPassword('demo1234');}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600}}>{a.email}</div>
+                <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>{a.desc}</div>
+              </div>
+              <span className={`badge ${a.role==='Admin'?'badge-blue':a.role==='Supervisor'?'badge-orange':'badge-gray'}`}>{a.role}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── App Shell ──────────────────────────────────────────────────────────────
 function App() {
+  const [user, setUser] = useState(() => TokenStore.user());
   const [page, setPage] = useState('dashboard');
   const [hitlCount, setHitlCount] = useState(0);
   const [toast, setToast] = useState(null);
   const wsRef = useRef(null);
+
+  function handleLogin(u) { setUser(u); }
+  function handleLogout() {
+    fetch('/api/auth/logout', {method:'POST'});
+    TokenStore.clear();
+    setUser(null);
+  }
+
+  if (!user) return <LoginScreen onLogin={handleLogin}/>;
 
   // Load initial HITL count
   useEffect(() => {
@@ -782,10 +889,19 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div style={{fontSize:12, color:'var(--muted)'}}>
+          <div style={{fontSize:12,color:'var(--muted)',marginBottom:8}}>
             <span className="status-dot"/>LifeOS · Connected
           </div>
-          <div style={{fontSize:11, color:'var(--muted)', marginTop:6}}>AgentForge v0.1.0</div>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:600,color:'var(--text)'}}>{user?.name||user?.email}</div>
+              <div style={{fontSize:11,color:'var(--muted)'}}>{user?.role}</div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={handleLogout} title="Sign out"
+              style={{padding:'4px 8px',fontSize:11}}>
+              Sign out
+            </button>
+          </div>
         </div>
       </div>
 

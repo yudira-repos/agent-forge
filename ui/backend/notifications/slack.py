@@ -31,7 +31,10 @@ async def slack_notify(request: ApprovalRequest, reviewer_group: str) -> None:
 
 def _build_blocks(request: ApprovalRequest, reviewer_group: str) -> list[dict[str, Any]]:
     ctx_lines = "\n".join(f"• *{k}:* {v}" for k, v in (request.context or {}).items())
-    console_url = f"http://localhost:8000/#hitl"  # replace with real domain in prod
+    import os
+    host = os.getenv("RAILWAY_PUBLIC_DOMAIN", os.getenv("APP_URL", "localhost:8000"))
+    proto = "https" if "localhost" not in host else "http"
+    console_url = f"{proto}://{host}/#hitl"
 
     return [
         {
