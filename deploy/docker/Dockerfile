@@ -58,4 +58,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 EXPOSE 8000
 
 # Start the server (Alembic runs automatically in production via init container)
-CMD ["uvicorn", "ui.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["sh", "-c", "uvicorn ui.backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"]

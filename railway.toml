@@ -1,0 +1,11 @@
+# Railway deployment config — use the production Dockerfile instead of Railpack auto-detect.
+# The FastAPI app lives at ui/backend/main.py (not project root), so Railpack cannot
+# infer a start command on its own.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/docker/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
