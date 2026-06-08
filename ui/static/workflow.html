@@ -630,6 +630,8 @@ function renderExecDetail(run){
   const steps=run.steps||[];
   const dur=run.completed_at?Math.round((run.completed_at-run.started_at)*10)/10+'s':'In progress…';
   const isHITL=run.status==='waiting_hitl';
+  const hitlStep=steps.find(s=>s.status==='waiting_hitl');
+  const hitlRequestId=hitlStep?.output?.hitl_request_id;
 
   const stepsHtml=steps.length?`
     <div class="steps-section">
@@ -667,7 +669,25 @@ function renderExecDetail(run){
       <div class="rd-cell"><div class="rd-cell-label">Duration</div><div class="rd-cell-val">${dur}</div></div>
     </div>
     ${run.error?`<div class="error-box">✗ ${run.error}</div>`:''}
-    ${isHITL?`<div class="hitl-banner">⏸ Paused at HITL gate — go to <a href="/">HITL Approvals</a> to approve or reject. Updates automatically when resolved.</div>`:''}
+    ${isHITL?`<div class="hitl-banner">
+      <div style="font-weight:600;margin-bottom:4px">⏸ Waiting for approval</div>
+      <div style="margin-bottom:10px;opacity:.85">Node: <strong>${hitlStep?.node_name||'HITL gate'}</strong>${hitlStep?.output?.action&&hitlStep.output.action!==hitlStep?.node_name?` — ${hitlStep.output.action}`:''}</div>
+      ${hitlRequestId?`
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button onclick="approveHITL('${hitlRequestId}')" id="btn-approve-${hitlRequestId}"
+            style="padding:6px 18px;background:rgba(45,212,191,.15);border:1px solid rgba(45,212,191,.35);color:var(--green);border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s"
+            onmouseover="this.style.background='rgba(45,212,191,.25)'" onmouseout="this.style.background='rgba(45,212,191,.15)'">
+            ✓ Approve
+          </button>
+          <button onclick="rejectHITL('${hitlRequestId}')" id="btn-reject-${hitlRequestId}"
+            style="padding:6px 18px;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:var(--red);border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s"
+            onmouseover="this.style.background='rgba(248,113,113,.2)'" onmouseout="this.style.background='rgba(248,113,113,.1)'">
+            ✗ Reject
+          </button>
+          <span style="font-size:10px;color:var(--muted)">or <a href="/" style="color:var(--blue)">manage in HITL Approvals →</a></span>
+        </div>`
+      :`<div style="font-size:11px"><a href="/" style="color:var(--blue)">Go to HITL Approvals to approve or reject →</a></div>`}
+    </div>`:''}
     ${stepsHtml}
     <div id="audit-events-${run.run_id}" style="margin:0 0 20px">
       <div style="padding:12px 22px 8px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:.5px;border-top:1px solid var(--border);margin-top:8px">
@@ -704,6 +724,44 @@ async function loadRunAudit(run_id){
       }).join('')}
     </div>`;
   }catch(e){container.textContent='Failed to load audit events.';}
+}
+
+// ── Inline HITL approve / reject ─────────────────────────────────────────────
+async function approveHITL(requestId){
+  const btn=document.getElementById('btn-approve-'+requestId);
+  if(btn){btn.disabled=true;btn.textContent='⏳ Approving…';}
+  try{
+    const r=await fetch(`/api/hitl/${requestId}/approve`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reviewer_id:'workflow-ui',reason:'Approved via Executions tab'}),
+    });
+    if(!r.ok)throw new Error(await r.text());
+    document.getElementById('sb-msg').textContent='✓ Approved — workflow resuming…';
+    // Polling timer will pick up the status change within 700ms
+  }catch(e){
+    document.getElementById('sb-msg').textContent='Approve failed: '+e.message;
+    if(btn){btn.disabled=false;btn.textContent='✓ Approve';}
+  }
+}
+
+async function rejectHITL(requestId){
+  const reason=prompt('Reason for rejection (optional):','Rejected via Executions tab');
+  if(reason===null)return; // user cancelled
+  const btn=document.getElementById('btn-reject-'+requestId);
+  if(btn){btn.disabled=true;btn.textContent='⏳ Rejecting…';}
+  try{
+    const r=await fetch(`/api/hitl/${requestId}/reject`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reviewer_id:'workflow-ui',reason}),
+    });
+    if(!r.ok)throw new Error(await r.text());
+    document.getElementById('sb-msg').textContent='✗ Rejected — workflow stopped.';
+  }catch(e){
+    document.getElementById('sb-msg').textContent='Reject failed: '+e.message;
+    if(btn){btn.disabled=false;btn.textContent='✗ Reject';}
+  }
 }
 
 async function r2j(url){const r=await fetch(url);return r.json();}

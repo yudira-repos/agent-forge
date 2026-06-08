@@ -42,6 +42,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 from ui.backend.routes.workflows import router as workflows_router  # noqa: E402
+from ui.backend.db import sqlite_store  # noqa: E402
 app.include_router(workflows_router)
 
 # ── Health endpoints (liveness + readiness) ───────────────────────────────────
@@ -462,21 +463,23 @@ async def approve_hitl(request_id: str, payload: ApprovePayload) -> dict[str, An
     req = hitl_orchestrator.get_request(request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
+    reason = payload.reason or "Approved via AgentForge UI"
+
+    # Write to DB FIRST — the workflow polling loop will see this within 1s
+    await sqlite_store.resolve_hitl(request_id, True, payload.reviewer_id, reason)
+    # Also call decide() so the HITL panel removes the request (safe without a Future)
     decision = ApprovalDecision(
-        request_id=request_id,
-        reviewer_id=payload.reviewer_id,
-        approved=True,
-        reason=payload.reason or "Approved via AgentForge UI",
+        request_id=request_id, reviewer_id=payload.reviewer_id,
+        approved=True, reason=reason,
     )
     await hitl_orchestrator.decide(decision)
+
     audit_logger.log(EventType.HITL_APPROVED, req.agent_id, req.correlation_id,
-                     payload={"reviewer": payload.reviewer_id, "reason": decision.reason},
+                     payload={"reviewer": payload.reviewer_id, "reason": reason},
                      severity=EventSeverity.INFO)
     await broadcast({
-        "type": "hitl_approved",
-        "request_id": request_id,
-        "agent_id": req.agent_id,
-        "action": req.action,
+        "type": "hitl_approved", "request_id": request_id,
+        "agent_id": req.agent_id, "action": req.action,
     })
     return {"status": "approved", "request_id": request_id}
 
@@ -486,22 +489,21 @@ async def reject_hitl(request_id: str, payload: RejectPayload) -> dict[str, Any]
     req = hitl_orchestrator.get_request(request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
+
+    # Write to DB FIRST — the workflow polling loop will see this within 1s
+    await sqlite_store.resolve_hitl(request_id, False, payload.reviewer_id, payload.reason)
     decision = ApprovalDecision(
-        request_id=request_id,
-        reviewer_id=payload.reviewer_id,
-        approved=False,
-        reason=payload.reason,
+        request_id=request_id, reviewer_id=payload.reviewer_id,
+        approved=False, reason=payload.reason,
     )
     await hitl_orchestrator.decide(decision)
+
     audit_logger.log(EventType.HITL_REJECTED, req.agent_id, req.correlation_id,
                      payload={"reviewer": payload.reviewer_id, "reason": payload.reason},
                      severity=EventSeverity.WARNING)
     await broadcast({
-        "type": "hitl_rejected",
-        "request_id": request_id,
-        "agent_id": req.agent_id,
-        "action": req.action,
-        "reason": payload.reason,
+        "type": "hitl_rejected", "request_id": request_id,
+        "agent_id": req.agent_id, "action": req.action, "reason": payload.reason,
     })
     return {"status": "rejected", "request_id": request_id}
 
@@ -603,6 +605,30 @@ class WorkflowRun(BaseModel):
 
 _workflow_runs: dict[str, WorkflowRun] = {}
 
+
+@app.on_event("startup")
+async def _startup() -> None:
+    """
+    Async startup handler — runs before the first request is served.
+
+    1. Creates DB tables (PostgreSQL on Railway, SQLite locally).
+    2. Loads persisted runs from the DB into the in-memory cache.
+    3. Marks any run that was still executing when the server last stopped
+       as failed, so the UI doesn't show a stuck spinner.
+    """
+    await sqlite_store.init_db()
+    for _saved in await sqlite_store.list_runs():
+        try:
+            _r = WorkflowRun(**_saved)
+            if _r.status in ("running", "waiting_hitl"):
+                _r.status = "failed"
+                _r.error = "Server restarted — run was interrupted"
+                _r.completed_at = _r.completed_at or time.time()
+                await sqlite_store.upsert_run(_r.run_id, _r.workflow_id, _r.model_dump())
+            _workflow_runs[_r.run_id] = _r
+        except Exception:
+            pass
+
 # Simulated execution delays (seconds) per node type
 _EXEC_DELAYS: dict[str, float] = {
     "trigger": 0.3, "agent": 1.2, "api": 0.7,
@@ -669,11 +695,39 @@ async def _run_workflow(run_id: str) -> None:
 
         try:
             if node.node_type == "hitl":
-                # ── Real HITL — suspends until a human approves in the console ──
+                # ── HITL — DB-polling approach (survives Railway restarts) ──────
                 step.status = "waiting_hitl"
                 run.status = "waiting_hitl"
 
-                # 1. Log the request BEFORE suspending — this is the missing event
+                # 1. Create the approval request manually (no asyncio.Future).
+                #    Register in _pending so it shows in the HITL Approvals panel.
+                req = ApprovalRequest.create(
+                    agent_id=f"wf:{run.workflow_id}",
+                    correlation_id=run_id,
+                    action=node.name,
+                    resource=f"workflow/{run.workflow_name}",
+                    context={"workflow": run.workflow_name, "node": node.name,
+                             "run_id": run_id, **node.config},
+                    timeout_seconds=3600,
+                )
+                hitl_orchestrator._pending[req.request_id] = req
+
+                # 2. Persist the pending request to the DB immediately.
+                #    The workflow background task will poll this table.
+                await sqlite_store.create_hitl_pending(req.request_id, run_id, node_id)
+
+                # 3. Store request_id in step output NOW (before the await) so
+                #    the frontend can show inline Approve/Reject buttons.
+                step.output = {
+                    "hitl_request_id": req.request_id,
+                    "action": node.name,
+                    "node": node.name,
+                }
+
+                # 4. Persist run state (includes hitl_request_id in step.output).
+                await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+
+                # 5. Log the HITL request to the audit trail.
                 audit_logger.log(
                     EventType.HITL_REQUESTED,
                     f"wf:{run.workflow_id}",
@@ -682,63 +736,62 @@ async def _run_workflow(run_id: str) -> None:
                         "node": node.name,
                         "action": node.name,
                         "workflow": run.workflow_name,
-                        "run_id": run_id,
-                        **{k: v for k, v in node.config.items() if k not in ("Expression",)},
+                        "request_id": req.request_id,
+                        **{k: v for k, v in node.config.items() if k != "Expression"},
                     },
                     severity=EventSeverity.WARNING,
                 )
-                await broadcast({"type": "wf_step", "run_id": run_id,
-                                 "node_id": node_id, "status": "waiting_hitl"})
+                # Broadcast includes request_id so WS clients can act on it
+                await broadcast({
+                    "type": "wf_step", "run_id": run_id, "node_id": node_id,
+                    "status": "waiting_hitl", "hitl_request_id": req.request_id,
+                })
 
-                # 2. Suspend — resumes when human approves/rejects in the console
-                approval = await hitl_orchestrator.request_approval(
-                    agent_id=f"wf:{run.workflow_id}",
-                    correlation_id=run_id,
-                    action=node.name,
-                    resource=f"workflow/{run.workflow_name}",
-                    context={
-                        "workflow": run.workflow_name,
-                        "node": node.name,
-                        "run_id": run_id,
-                        **node.config,
-                    },
-                    timeout_seconds=3600,
+                # 6. Poll SQLite until a decision is recorded (1s interval).
+                #    This loop survives server restarts unlike asyncio.Future.
+                decision = await sqlite_store.wait_for_decision(
+                    req.request_id, timeout_seconds=3600
                 )
+
+                # 7. Clean up from HITL panel.
+                hitl_orchestrator._pending.pop(req.request_id, None)
+
                 run.status = "running"
-                step.output = {
-                    "approved": approval.approved,
-                    "reviewer": approval.reviewer_id,
-                    "reason": approval.reason or "",
-                }
-                # Log resumption so the audit trail shows the workflow continued
+                step.output.update({
+                    "approved": decision["approved"],
+                    "reviewer": decision["reviewer_id"],
+                    "reason": decision["reason"],
+                })
+
+                # 8. Log resumption — explicit event so audit trail shows continuation.
                 audit_logger.log(
                     EventType.AGENT_STARTED,
                     f"wf:{run.workflow_id}",
                     run_id,
                     payload={"event": "hitl_resumed", "node": node.name,
-                             "reviewer": approval.reviewer_id,
-                             "approved": approval.approved},
+                             "reviewer": decision["reviewer_id"],
+                             "approved": decision["approved"]},
                 )
-                await broadcast({"type": "wf_hitl_resolved", "run_id": run_id,
-                                 "node_id": node_id, "approved": approval.approved,
-                                 "reviewer": approval.reviewer_id})
+                await broadcast({
+                    "type": "wf_hitl_resolved", "run_id": run_id, "node_id": node_id,
+                    "approved": decision["approved"], "reviewer": decision["reviewer_id"],
+                })
 
-                # 3. Only log APPROVED/REJECTED here for system-driven outcomes
-                #    (timeout auto-approve / auto-reject).  Human decisions are
-                #    already logged by the /approve and /reject endpoints.
-                is_system = approval.reviewer_id == "system"
+                # 9. Only log APPROVED/REJECTED here for system timeouts.
+                #    Human decisions are already logged by the /approve and /reject endpoints.
+                is_system = decision["reviewer_id"] == "system"
 
-                if not approval.approved:
+                if not decision["approved"]:
                     step.status = "failed"
                     step.completed_at = time.time()
                     run.status = "failed"
-                    run.error = f"HITL rejected at '{node.name}': {approval.reason}"
+                    run.error = f"HITL rejected at '{node.name}': {decision['reason']}"
                     if is_system:
                         audit_logger.log(
                             EventType.HITL_REJECTED,
                             f"wf:{run.workflow_id}",
                             run_id,
-                            payload={"node": node.name, "reason": approval.reason,
+                            payload={"node": node.name, "reason": decision["reason"],
                                      "via": "timeout"},
                             severity=EventSeverity.WARNING,
                         )
@@ -789,6 +842,9 @@ async def _run_workflow(run_id: str) -> None:
                          "node_id": node_id, "status": "completed",
                          "duration_ms": step.duration_ms})
 
+        # Persist step completion to DB
+        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+
         # Follow outgoing edges
         out_edges = edges_from.get(node_id, [])
         if node.node_type == "condition":
@@ -812,6 +868,8 @@ async def _run_workflow(run_id: str) -> None:
         run.error = str(exc)
         run.completed_at = time.time()
 
+    # Persist final run state to DB
+    await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
     await broadcast({"type": "wf_run_done", "run_id": run_id,
                      "status": run.status, "workflow_name": run.workflow_name})
 
