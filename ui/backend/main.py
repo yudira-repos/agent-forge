@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,7 @@ from pydantic import BaseModel
 # ── AgentForge imports ────────────────────────────────────────────────────────
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "ui"))
 
 from agentforge.aiam import AgentIdentity, RBACPolicy, Permission
 from agentforge.audit import AuditLogger, AuditQuery, AuditTrail, EventSeverity, EventType
@@ -38,6 +39,10 @@ from agentforge.registry.registry import SQLiteBackend
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(title="AgentForge UI", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ── Routers ───────────────────────────────────────────────────────────────────
+from ui.backend.routes.workflows import router as workflows_router  # noqa: E402
+app.include_router(workflows_router)
 
 # ── Health endpoints (liveness + readiness) ───────────────────────────────────
 @app.get("/health")
@@ -563,6 +568,309 @@ def serve_ui() -> FileResponse:
     return HTMLResponse("<h1>AgentForge UI</h1><p>Static files not found. Place index.html in ui/static/</p>")
 
 
+@app.get("/workflow")
+def serve_workflow() -> FileResponse:
+    page = STATIC_DIR / "workflow.html"
+    if page.exists():
+        return FileResponse(str(page))
+    return HTMLResponse("<h1>Workflow Designer</h1><p>workflow.html not found in ui/static/</p>")
+
+
+# ── Workflow Execution Engine ─────────────────────────────────────────────────
+
+class StepResult(BaseModel):
+    node_id: str
+    node_type: str
+    node_name: str
+    status: str = "pending"          # pending | running | waiting_hitl | completed | failed | skipped
+    started_at: float = 0.0
+    completed_at: float | None = None
+    duration_ms: float | None = None
+    output: dict[str, Any] = {}
+
+
+class WorkflowRun(BaseModel):
+    run_id: str
+    workflow_id: str
+    workflow_name: str
+    status: str = "running"          # running | waiting_hitl | completed | failed
+    steps: list[StepResult] = []
+    current_node_id: str | None = None
+    started_at: float = 0.0
+    completed_at: float | None = None
+    error: str | None = None
+
+
+_workflow_runs: dict[str, WorkflowRun] = {}
+
+# Simulated execution delays (seconds) per node type
+_EXEC_DELAYS: dict[str, float] = {
+    "trigger": 0.3, "agent": 1.2, "api": 0.7,
+    "transform": 0.4, "event": 0.2, "loop": 0.5, "subwf": 0.9,
+}
+
+
+async def _run_workflow(run_id: str) -> None:
+    """Background task: walks the workflow DAG and executes each node."""
+    from ui.backend.routes.workflows import _store as _wf_store
+
+    run = _workflow_runs.get(run_id)
+    if not run:
+        return
+
+    wf = _wf_store.get(run.workflow_id)
+    if not wf:
+        run.status = "failed"
+        run.error = "Workflow definition not found"
+        return
+
+    # Build adjacency: node_id → outgoing edges
+    edges_from: dict[str, list[Any]] = {}
+    for e in wf.edges:
+        edges_from.setdefault(e.from_node, []).append(e)
+
+    # Find entry nodes (no incoming edges)
+    all_targets = {e.to_node for e in wf.edges}
+    entry_nodes = [n.node_id for n in wf.nodes if n.node_id not in all_targets]
+    if not entry_nodes:
+        entry_nodes = [wf.nodes[0].node_id] if wf.nodes else []
+
+    node_map = {n.node_id: n for n in wf.nodes}
+    visited: set[str] = set()
+
+    async def execute_node(node_id: str) -> None:
+        if node_id in visited:
+            return
+        visited.add(node_id)
+
+        node = node_map.get(node_id)
+        if not node:
+            return
+
+        run.current_node_id = node_id
+        step = StepResult(
+            node_id=node_id, node_type=node.node_type,
+            node_name=node.name, status="running", started_at=time.time(),
+        )
+        run.steps.append(step)
+
+        # Log start to audit trail
+        audit_logger.log(
+            EventType.AGENT_STARTED,
+            f"wf:{run.workflow_id}",
+            run_id,
+            payload={"node": node.name, "node_type": node.node_type, "workflow": run.workflow_name},
+        )
+        await broadcast({"type": "wf_step", "run_id": run_id,
+                         "node_id": node_id, "node_name": node.name,
+                         "node_type": node.node_type, "status": "running"})
+
+        next_port: str | None = None
+
+        try:
+            if node.node_type == "hitl":
+                # ── Real HITL — suspends until a human approves in the console ──
+                step.status = "waiting_hitl"
+                run.status = "waiting_hitl"
+
+                # 1. Log the request BEFORE suspending — this is the missing event
+                audit_logger.log(
+                    EventType.HITL_REQUESTED,
+                    f"wf:{run.workflow_id}",
+                    run_id,
+                    payload={
+                        "node": node.name,
+                        "action": node.name,
+                        "workflow": run.workflow_name,
+                        "run_id": run_id,
+                        **{k: v for k, v in node.config.items() if k not in ("Expression",)},
+                    },
+                    severity=EventSeverity.WARNING,
+                )
+                await broadcast({"type": "wf_step", "run_id": run_id,
+                                 "node_id": node_id, "status": "waiting_hitl"})
+
+                # 2. Suspend — resumes when human approves/rejects in the console
+                approval = await hitl_orchestrator.request_approval(
+                    agent_id=f"wf:{run.workflow_id}",
+                    correlation_id=run_id,
+                    action=node.name,
+                    resource=f"workflow/{run.workflow_name}",
+                    context={
+                        "workflow": run.workflow_name,
+                        "node": node.name,
+                        "run_id": run_id,
+                        **node.config,
+                    },
+                    timeout_seconds=3600,
+                )
+                run.status = "running"
+                step.output = {
+                    "approved": approval.approved,
+                    "reviewer": approval.reviewer_id,
+                    "reason": approval.reason or "",
+                }
+                # Log resumption so the audit trail shows the workflow continued
+                audit_logger.log(
+                    EventType.AGENT_STARTED,
+                    f"wf:{run.workflow_id}",
+                    run_id,
+                    payload={"event": "hitl_resumed", "node": node.name,
+                             "reviewer": approval.reviewer_id,
+                             "approved": approval.approved},
+                )
+                await broadcast({"type": "wf_hitl_resolved", "run_id": run_id,
+                                 "node_id": node_id, "approved": approval.approved,
+                                 "reviewer": approval.reviewer_id})
+
+                # 3. Only log APPROVED/REJECTED here for system-driven outcomes
+                #    (timeout auto-approve / auto-reject).  Human decisions are
+                #    already logged by the /approve and /reject endpoints.
+                is_system = approval.reviewer_id == "system"
+
+                if not approval.approved:
+                    step.status = "failed"
+                    step.completed_at = time.time()
+                    run.status = "failed"
+                    run.error = f"HITL rejected at '{node.name}': {approval.reason}"
+                    if is_system:
+                        audit_logger.log(
+                            EventType.HITL_REJECTED,
+                            f"wf:{run.workflow_id}",
+                            run_id,
+                            payload={"node": node.name, "reason": approval.reason,
+                                     "via": "timeout"},
+                            severity=EventSeverity.WARNING,
+                        )
+                    await broadcast({"type": "wf_step", "run_id": run_id,
+                                     "node_id": node_id, "status": "failed"})
+                    return
+
+                if is_system:
+                    audit_logger.log(
+                        EventType.HITL_APPROVED,
+                        f"wf:{run.workflow_id}",
+                        run_id,
+                        payload={"node": node.name, "via": "timeout_auto_approve"},
+                    )
+
+            elif node.node_type == "condition":
+                # Always take "yes" branch in simulation (real eval needs runtime context)
+                await asyncio.sleep(0.3)
+                next_port = "yes"
+                step.output = {"branch": "yes", "expression": node.config.get("Expression", "")}
+
+            else:
+                # Simulate realistic execution delay
+                await asyncio.sleep(_EXEC_DELAYS.get(node.node_type, 0.5))
+
+        except Exception as exc:
+            step.status = "failed"
+            step.completed_at = time.time()
+            run.status = "failed"
+            run.error = str(exc)
+            await broadcast({"type": "wf_step", "run_id": run_id,
+                             "node_id": node_id, "status": "failed"})
+            return
+
+        # Mark step complete
+        step.status = "completed"
+        step.completed_at = time.time()
+        step.duration_ms = round((step.completed_at - step.started_at) * 1000)
+
+        audit_logger.log(
+            EventType.TOOL_COMPLETED,
+            f"wf:{run.workflow_id}",
+            run_id,
+            payload={"node": node.name, "node_type": node.node_type,
+                     "duration_ms": step.duration_ms, **step.output},
+        )
+        await broadcast({"type": "wf_step", "run_id": run_id,
+                         "node_id": node_id, "status": "completed",
+                         "duration_ms": step.duration_ms})
+
+        # Follow outgoing edges
+        out_edges = edges_from.get(node_id, [])
+        if node.node_type == "condition":
+            out_edges = [e for e in out_edges if e.port == next_port]
+
+        for edge in out_edges:
+            if run.status == "failed":
+                break
+            await execute_node(edge.to_node)
+
+    try:
+        for entry in entry_nodes:
+            await execute_node(entry)
+
+        if run.status not in ("failed",):
+            run.status = "completed"
+        run.completed_at = time.time()
+
+    except Exception as exc:
+        run.status = "failed"
+        run.error = str(exc)
+        run.completed_at = time.time()
+
+    await broadcast({"type": "wf_run_done", "run_id": run_id,
+                     "status": run.status, "workflow_name": run.workflow_name})
+
+
+@app.post("/api/workflows/{workflow_id}/execute")
+async def execute_workflow(workflow_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    from ui.backend.routes.workflows import _store as _wf_store
+
+    wf = _wf_store.get(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    run_id = f"run-{uuid.uuid4().hex[:8]}"
+    run = WorkflowRun(
+        run_id=run_id,
+        workflow_id=workflow_id,
+        workflow_name=wf.name,
+        status="running",
+        started_at=time.time(),
+    )
+    _workflow_runs[run_id] = run
+
+    # Log workflow start to audit trail
+    audit_logger.log(
+        EventType.AGENT_STARTED,
+        f"wf:{workflow_id}",
+        run_id,
+        payload={"workflow": wf.name, "version": wf.version, "nodes": len(wf.nodes)},
+    )
+
+    background_tasks.add_task(_run_workflow, run_id)
+    return {"run_id": run_id, "status": "started"}
+
+
+@app.get("/api/workflows/runs")
+def list_workflow_runs(workflow_id: str | None = None) -> list[dict[str, Any]]:
+    runs = list(_workflow_runs.values())
+    if workflow_id:
+        runs = [r for r in runs if r.workflow_id == workflow_id]
+    return [r.model_dump() for r in sorted(runs, key=lambda r: r.started_at, reverse=True)]
+
+
+@app.get("/api/workflows/runs/{run_id}")
+def get_workflow_run(run_id: str) -> dict[str, Any]:
+    run = _workflow_runs.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run.model_dump()
+
+
+@app.get("/api/workflows/runs/{run_id}/audit")
+def get_run_audit(run_id: str) -> list[dict[str, Any]]:
+    """All audit events for a specific workflow run (matched by correlation_id = run_id)."""
+    from agentforge.audit import AuditQuery
+    q = AuditQuery(correlation_id=run_id, limit=200)
+    events = audit_trail.query(q)
+    return [_fmt_event(e) for e in sorted(events, key=lambda e: e.timestamp)]
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _fmt_event(e: Any) -> dict[str, Any]:
     return {
@@ -580,7 +888,20 @@ def _fmt_event(e: Any) -> dict[str, Any]:
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+    _root = Path(__file__).parent.parent.parent
     print("\n★  AgentForge Enterprise UI  ★")
     print("   http://localhost:8000\n")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True,
-                app_dir=str(Path(__file__).parent))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        app_dir=str(Path(__file__).parent),
+        # Only watch source dirs — never .venv
+        reload_dirs=[
+            str(_root / "agentforge"),
+            str(_root / "ui" / "backend"),
+            str(_root / "ui" / "static"),
+        ],
+        reload_excludes=["*.pyc", "__pycache__", ".venv", "*.egg-info"],
+    )

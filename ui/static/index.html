@@ -903,6 +903,7 @@ function AuthenticatedApp({user, onLogout}) {
     {id:'registry', label:'Agent Registry', icon:Icon.agents},
     ...(can(user,'view_hitl') ? [{id:'hitl', label:'Approvals', icon:Icon.hitl, badge: hitlCount > 0 ? hitlCount : null}] : []),
     {id:'audit', label:'Audit Trail', icon:Icon.audit},
+    {id:'__workflow', label:'Workflows', icon:Icon.agents},
   ];
 
   return (
@@ -914,7 +915,9 @@ function AuthenticatedApp({user, onLogout}) {
         </div>
         <nav className="nav">
           {pages.map(p=>(
-            <div key={p.id} className={`nav-item ${page===p.id?'active':''}`} onClick={()=>setPage(p.id)}>
+            <div key={p.id}
+              className={`nav-item ${page===p.id?'active':''}`}
+              onClick={()=>p.id==='__workflow'?window.location.href='/workflow':setPage(p.id)}>
               {p.icon} {p.label}
               {p.badge && <span className="nav-badge">{p.badge}</span>}
             </div>
