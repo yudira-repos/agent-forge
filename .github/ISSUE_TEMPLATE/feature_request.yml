@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new feature or enhancement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or pain point
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should it work? API sketch welcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component?
+      options:
+        - AIAM (identity & authority)
+        - Registry
+        - Governance / compliance profiles
+        - Audit SDK
+        - HITL orchestration
+        - Runtime adapters
+        - Enterprise UI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

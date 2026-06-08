@@ -1,0 +1,41 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*.*.*"   # triggers on v0.1.0, v1.2.3, etc.
+
+permissions:
+  contents: read
+  id-token: write   # required for trusted publishing (OIDC)
+
+jobs:
+  publish:
+    name: Build & publish
+    runs-on: ubuntu-latest
+    environment: pypi   # maps to the "pypi" GitHub environment
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build distribution
+        run: python -m build
+
+      - name: Check dist
+        run: twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses OIDC trusted publishing — no API token needed if configured on PyPI.
+        # Fallback: set PYPI_API_TOKEN secret and uncomment below:
+        # with:
+        #   password: ${{ secrets.PYPI_API_TOKEN }}

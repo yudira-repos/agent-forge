@@ -224,6 +224,151 @@ Real-time WebSocket push keeps the HITL badge and event feed live without refres
 
 ---
 
+## Integration with LifeOS and Other Apps
+
+AgentForge integrates with any application — LifeOS (the demo personal-agent system), CRM, billing, HR, DevOps, or your own backend — via the **embedded SDK**, the **REST API**, or a **hybrid** of both.
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph app ["Your Application (LifeOS / CRM / ERP / …)"]
+        A1["Health Agent"]
+        A2["Finance Agent"]
+        A3["Your Business Logic"]
+    end
+
+    subgraph sdk ["Mode 1 — Embedded SDK"]
+        SDK["agentforge pip package"]
+    end
+
+    subgraph remote ["Mode 2 — Remote API"]
+        API["AgentForge Console"]
+        UI["Human Reviewers"]
+        Slack["Slack / Email / PagerDuty"]
+    end
+
+    A1 --> SDK
+    A2 --> SDK
+    A3 --> SDK
+    SDK -->|"register · audit · HITL · policy"| API
+    app -->|"REST + WebSocket"| API
+    API --> UI
+    API --> Slack
+```
+
+**Hybrid production setup** (recommended):
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Your App Backend (Python / Node / Go)                   │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐         │
+│  │ Agent A    │  │ Agent B    │  │ Agent C    │         │
+│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘         │
+│        └──────── agentforge SDK ────────┘                │
+└────────────────────────┬─────────────────────────────────┘
+                         │ REST · WebSocket
+┌────────────────────────▼─────────────────────────────────┐
+│  AgentForge Console (Docker / Railway / K8s)             │
+│  HITL approvals · Audit trail · Registry · Compliance    │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Integration modes
+
+| Mode | Best for | What you use |
+|---|---|---|
+| **Embedded SDK** | Agent code runs in your app (LifeOS backend) | `pip install agentforge` — registry, governance, audit, HITL in-process |
+| **Remote API** | Any language / microservices | `POST /api/agents`, `GET /api/hitl/pending`, `POST /api/hitl/{id}/approve` |
+| **Hybrid** | Production | SDK in agent services + deployed console for human reviewers |
+
+### LifeOS example
+
+LifeOS is the demo scenario shipped with AgentForge — five personal agents (health, finance, goals, journal, scheduler) owned by `lifeos-core`. The same pattern applies to any multi-agent app.
+
+**Embedded SDK** (runs locally, no server needed):
+
+```bash
+python examples/lifeos_integration.py
+```
+
+**Sync to a running console** (local, Docker, or Railway):
+
+```bash
+python examples/lifeos_integration.py --api-url http://localhost:8000
+python examples/lifeos_integration.py --api-url https://your-app.railway.app
+# → Open console → HITL Approvals → approve the rent transfer
+```
+
+**Minimal SDK integration in your app:**
+
+```python
+from agentforge.registry import AgentRegistry, AgentManifest, AgentCapability
+from agentforge.governance import SOC2Profile, PolicyContext
+from agentforge.audit import AuditLogger, EventType
+from agentforge.hitl import HITLOrchestrator, EscalationPolicy
+
+registry = AgentRegistry()
+registry.register(AgentManifest(
+    agent_id="finance-agent-001",
+    name="Finance Manager",
+    owner="lifeos-core",  # or "your-company-core"
+    capabilities=[
+        AgentCapability("transfer_funds", "Move money", requires_hitl=True),
+    ],
+))
+
+audit = AuditLogger(sinks=[...])
+gov = SOC2Profile.engine()
+hitl = HITLOrchestrator(escalation_policy=EscalationPolicy.standard())
+
+async def transfer_funds(amount: float, payee: str, run_id: str):
+    agent_id = "finance-agent-001"
+    audit.log(EventType.AGENT_STARTED, agent_id, run_id)
+
+    decision = gov.evaluate(PolicyContext(
+        agent_id=agent_id, agent_roles=["operator"],
+        action="transfer_funds", resource="bank-account",
+        environment="production", metadata={"amount_usd": amount},
+    ))
+    if decision.is_denied:
+        raise PermissionError(decision.reason)
+
+    approval = await hitl.request_approval(
+        agent_id=agent_id, correlation_id=run_id,
+        action="transfer_funds", resource="bank-account",
+        context={"amount_usd": amount, "payee": payee},
+    )
+    if not approval.approved:
+        raise PermissionError(approval.reason)
+
+    # … execute transfer …
+    audit.tool_completed(agent_id, run_id, "transfer_funds")
+```
+
+### REST API reference
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Liveness check |
+| `/api/agents` | GET / POST | List or register agents |
+| `/api/hitl/pending` | GET | Pending approval queue |
+| `/api/hitl/{id}/approve` | POST | Approve a HITL request |
+| `/api/hitl/{id}/reject` | POST | Reject a HITL request |
+| `/api/audit` | GET | Search audit events |
+| `/api/audit/{correlation_id}/replay` | GET | Replay a workflow run |
+| `/ws/events` | WebSocket | Real-time event stream |
+| `/docs` | GET | Interactive OpenAPI docs |
+
+Use a shared `correlation_id` (e.g. `run-mon-001`) across all agent actions in a workflow so the audit trail can replay the full decision chain.
+
+See also:
+- [`examples/lifeos_integration.py`](examples/lifeos_integration.py) — LifeOS SDK + API demo
+- [`examples/enterprise_workflow.py`](examples/enterprise_workflow.py) — enterprise payment workflow
+- [`scripts/seed_demo.py`](scripts/seed_demo.py) — load demo data into a running console
+
+---
+
 ## Quick Start
 
 ```bash
@@ -266,7 +411,7 @@ async def main():
 asyncio.run(main())
 ```
 
-See [`examples/enterprise_workflow.py`](examples/enterprise_workflow.py) for a complete end-to-end demo.
+See [`examples/enterprise_workflow.py`](examples/enterprise_workflow.py) for a complete end-to-end demo, and [`examples/lifeos_integration.py`](examples/lifeos_integration.py) for LifeOS / multi-agent app integration.
 
 ---
 
