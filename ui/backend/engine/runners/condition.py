@@ -41,13 +41,45 @@ _SAFE_BUILTINS: dict[str, Any] = {
 }
 
 
+def _coerce_numerics(data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Coerce string values that are pure numbers to int or float.
+
+    Real LLMs sometimes return numeric fields as JSON strings even when told
+    to return a number (e.g. ``"amount_usd": "15000"``).  Without coercion,
+    ``ctx.amount_usd > 10000`` raises TypeError (str > int) which gets caught
+    and silently routes the condition to "no", skipping HITL entirely.
+
+    Only pure-numeric strings are coerced; strings like "V-12345" or "success"
+    are left untouched.
+    """
+    out: dict[str, Any] = {}
+    for k, v in data.items():
+        if isinstance(v, str):
+            try:
+                out[k] = int(v)
+                continue
+            except ValueError:
+                pass
+            try:
+                out[k] = float(v)
+                continue
+            except ValueError:
+                pass
+        out[k] = v
+    return out
+
+
 def _eval_expr(expr: str, ctx: ExecutionContext) -> bool:
+    from types import SimpleNamespace
+
+    coerced = _coerce_numerics(ctx.data)
     namespace: dict[str, Any] = {
         **_SAFE_BUILTINS,
-        "ctx": ctx.as_namespace(),
-        # Also expose top-level keys directly so expressions like
-        # ``amount_usd > 10000`` work alongside ``ctx.amount_usd > 10000``
-        **ctx.data,
+        # ctx.xxx access — uses coerced values so "15000" > 10000 works
+        "ctx": SimpleNamespace(**coerced),
+        # Direct top-level access: ``amount_usd > 10000`` alongside ``ctx.amount_usd > 10000``
+        **coerced,
     }
     result = eval(  # noqa: S307 — restricted namespace, no __builtins__
         compile(expr, "<condition>", "eval"),

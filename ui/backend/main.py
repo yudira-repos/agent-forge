@@ -488,52 +488,76 @@ def get_pending_hitl() -> list[dict[str, Any]]:
     return sorted(result, key=lambda r: r["created_at"])
 
 
+def _hitl_audit_ctx(request_id: str) -> tuple[str, str, str]:
+    """
+    Derive agent_id / correlation_id / action for audit logging when the
+    ApprovalRequest is not in _pending (e.g. after a server restart).
+
+    Scans the in-memory run cache looking for a step whose output contains
+    the matching hitl_request_id.
+    """
+    for run in _workflow_runs.values():
+        for step in run.steps:
+            if step.output.get("hitl_request_id") == request_id:
+                return f"wf:{run.workflow_id}", run.run_id, step.node_name
+    return "wf:unknown", request_id, "approval"
+
+
 @app.post("/api/hitl/{request_id}/approve")
 async def approve_hitl(request_id: str, payload: ApprovePayload) -> dict[str, Any]:
+    # req may be None after a server restart (in-memory _pending is cleared).
+    # We always proceed with DB resolution — the polling loop picks it up within 1s.
     req = hitl_orchestrator.get_request(request_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Request not found")
     reason = payload.reason or "Approved via AgentForge UI"
 
     # Write to DB FIRST — the workflow polling loop will see this within 1s
     await sqlite_store.resolve_hitl(request_id, True, payload.reviewer_id, reason)
-    # Also call decide() so the HITL panel removes the request (safe without a Future)
+
+    # Update in-memory orchestrator state (no-op if req is None)
     decision = ApprovalDecision(
         request_id=request_id, reviewer_id=payload.reviewer_id,
         approved=True, reason=reason,
     )
-    await hitl_orchestrator.decide(decision)
+    if req:
+        await hitl_orchestrator.decide(decision)
+        agent_id, correlation_id, action = req.agent_id, req.correlation_id, req.action
+    else:
+        agent_id, correlation_id, action = _hitl_audit_ctx(request_id)
 
-    audit_logger.log(EventType.HITL_APPROVED, req.agent_id, req.correlation_id,
+    audit_logger.log(EventType.HITL_APPROVED, agent_id, correlation_id,
                      payload={"reviewer": payload.reviewer_id, "reason": reason},
                      severity=EventSeverity.INFO)
     await broadcast({
         "type": "hitl_approved", "request_id": request_id,
-        "agent_id": req.agent_id, "action": req.action,
+        "agent_id": agent_id, "action": action,
     })
     return {"status": "approved", "request_id": request_id}
 
 
 @app.post("/api/hitl/{request_id}/reject")
 async def reject_hitl(request_id: str, payload: RejectPayload) -> dict[str, Any]:
+    # req may be None after a server restart — proceed with DB resolution regardless.
     req = hitl_orchestrator.get_request(request_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Request not found")
 
     # Write to DB FIRST — the workflow polling loop will see this within 1s
     await sqlite_store.resolve_hitl(request_id, False, payload.reviewer_id, payload.reason)
+
     decision = ApprovalDecision(
         request_id=request_id, reviewer_id=payload.reviewer_id,
         approved=False, reason=payload.reason,
     )
-    await hitl_orchestrator.decide(decision)
+    if req:
+        await hitl_orchestrator.decide(decision)
+        agent_id, correlation_id, action = req.agent_id, req.correlation_id, req.action
+    else:
+        agent_id, correlation_id, action = _hitl_audit_ctx(request_id)
 
-    audit_logger.log(EventType.HITL_REJECTED, req.agent_id, req.correlation_id,
+    audit_logger.log(EventType.HITL_REJECTED, agent_id, correlation_id,
                      payload={"reviewer": payload.reviewer_id, "reason": payload.reason},
                      severity=EventSeverity.WARNING)
     await broadcast({
         "type": "hitl_rejected", "request_id": request_id,
-        "agent_id": req.agent_id, "action": req.action, "reason": payload.reason,
+        "agent_id": agent_id, "action": action, "reason": payload.reason,
     })
     return {"status": "rejected", "request_id": request_id}
 
@@ -641,6 +665,108 @@ class WorkflowRun(BaseModel):
 _workflow_runs: dict[str, WorkflowRun] = {}
 
 
+# ── HITL restart-recovery helpers ────────────────────────────────────────────
+
+def _apply_saved_hitl_decision(
+    run: "WorkflowRun", step: "StepResult", decision: dict[str, Any]
+) -> None:
+    """Apply an already-decided HITL outcome loaded from DB during startup."""
+    step.output.update({
+        "approved":  decision["approved"],
+        "reviewer":  decision.get("reviewer_id", "unknown"),
+        "reason":    decision.get("reason", ""),
+    })
+    step.status = "completed" if decision["approved"] else "failed"
+    step.completed_at = time.time()
+    if decision["approved"]:
+        run.status = "completed"
+        run.completed_at = time.time()
+    else:
+        run.status = "failed"
+        run.error = f"HITL rejected: {decision.get('reason', '')}"
+        run.completed_at = time.time()
+
+
+def _restore_hitl_request(
+    run: "WorkflowRun", step: "StepResult", request_id: str
+) -> None:
+    """
+    Re-add a HITL request to the in-memory orchestrator after a server restart.
+
+    ApprovalRequest.create() generates a new UUID internally, but we store it
+    in _pending under the ORIGINAL request_id (from the DB) so that
+    ``hitl_orchestrator.get_request(request_id)`` still finds it.
+    """
+    req = ApprovalRequest.create(
+        agent_id=f"wf:{run.workflow_id}",
+        correlation_id=run.run_id,
+        action=step.node_name,
+        resource=f"workflow/{run.workflow_name}",
+        context={
+            "run_id": run.run_id,
+            "node": step.node_name,
+            "workflow": run.workflow_name,
+            "_restored_after_restart": True,
+        },
+        timeout_seconds=3600,
+    )
+    hitl_orchestrator._pending[request_id] = req
+
+
+async def _wait_and_apply_hitl(run_id: str, request_id: str) -> None:
+    """
+    Post-restart HITL recovery task.
+
+    The original ``execute_node`` background task is gone after a restart.
+    This lightweight coroutine polls the DB for the decision and applies it
+    to the in-memory run state when a human approves or rejects.
+
+    Limitation: post-HITL DAG nodes are NOT re-executed after restart — the
+    run is marked completed/failed at the HITL boundary.  Full DAG resumption
+    requires persisted execution-graph state and is planned as a future
+    improvement.
+    """
+    run = _workflow_runs.get(run_id)
+    if not run:
+        return
+
+    try:
+        decision = await sqlite_store.wait_for_decision(request_id, timeout_seconds=3600)
+    except Exception as exc:
+        decision = {
+            "approved": False,
+            "reviewer_id": "system",
+            "reason": f"Recovery error: {exc}",
+        }
+
+    # Remove from HITL panel
+    hitl_orchestrator._pending.pop(request_id, None)
+
+    hitl_step = next((s for s in run.steps if s.status == "waiting_hitl"), None)
+    if hitl_step:
+        _apply_saved_hitl_decision(run, hitl_step, decision)
+    else:
+        # Fallback — no waiting step found
+        run.status = "completed" if decision["approved"] else "failed"
+        run.completed_at = time.time()
+
+    audit_event = EventType.HITL_APPROVED if decision["approved"] else EventType.HITL_REJECTED
+    audit_logger.log(
+        audit_event,
+        f"wf:{run.workflow_id}",
+        run_id,
+        payload={"reviewer": decision["reviewer_id"], "via": "restart_recovery"},
+        severity=EventSeverity.INFO if decision["approved"] else EventSeverity.WARNING,
+    )
+    await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+    await broadcast({
+        "type": "wf_hitl_resolved",
+        "run_id": run_id,
+        "approved": decision["approved"],
+        "reviewer": decision["reviewer_id"],
+    })
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     """
@@ -648,18 +774,51 @@ async def _startup() -> None:
 
     1. Creates DB tables (PostgreSQL on Railway, SQLite locally).
     2. Loads persisted runs from the DB into the in-memory cache.
-    3. Marks any run that was still executing when the server last stopped
-       as failed, so the UI doesn't show a stuck spinner.
+    3. ``running`` runs cannot be resumed — marked failed.
+    4. ``waiting_hitl`` runs are recovered:
+         - Already decided in DB  → apply decision, mark completed/failed.
+         - Still pending           → restore to _pending, start recovery task
+                                     so Approve/Reject keeps working.
     """
     await sqlite_store.init_db()
     for _saved in await sqlite_store.list_runs():
         try:
             _r = WorkflowRun(**_saved)
-            if _r.status in ("running", "waiting_hitl"):
+
+            if _r.status == "running":
+                # Can't resume mid-execution — mark failed
                 _r.status = "failed"
                 _r.error = "Server restarted — run was interrupted"
                 _r.completed_at = _r.completed_at or time.time()
                 await sqlite_store.upsert_run(_r.run_id, _r.workflow_id, _r.model_dump())
+
+            elif _r.status == "waiting_hitl":
+                # Try to recover the HITL run
+                _hitl_step = next(
+                    (s for s in _r.steps if s.status == "waiting_hitl"), None
+                )
+                _request_id = (
+                    _hitl_step.output.get("hitl_request_id") if _hitl_step else None
+                )
+
+                if _request_id:
+                    _decision = await sqlite_store.get_hitl_decision(_request_id)
+                    if _decision is not None:
+                        # Decision was already made before the restart — apply immediately
+                        _apply_saved_hitl_decision(_r, _hitl_step, _decision)
+                        await sqlite_store.upsert_run(_r.run_id, _r.workflow_id, _r.model_dump())
+                    else:
+                        # Still waiting for a human — restore _pending and start
+                        # a recovery task that will resume once the user clicks Approve/Reject
+                        _restore_hitl_request(_r, _hitl_step, _request_id)
+                        asyncio.create_task(_wait_and_apply_hitl(_r.run_id, _request_id))
+                else:
+                    # Can't identify the HITL request — mark failed
+                    _r.status = "failed"
+                    _r.error = "Server restarted — HITL request details unavailable"
+                    _r.completed_at = time.time()
+                    await sqlite_store.upsert_run(_r.run_id, _r.workflow_id, _r.model_dump())
+
             _workflow_runs[_r.run_id] = _r
         except Exception:
             pass
