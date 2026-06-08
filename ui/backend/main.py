@@ -631,6 +631,11 @@ class WorkflowRun(BaseModel):
     started_at: float = 0.0
     completed_at: float | None = None
     error: str | None = None
+    # Execution context snapshot — updated after every node so the UI can show
+    # the live data flowing through the workflow (e.g. extracted invoice fields)
+    context_snapshot: dict[str, Any] = {}
+    # Initial input data supplied to the /execute endpoint
+    input_data: dict[str, Any] = {}
 
 
 _workflow_runs: dict[str, WorkflowRun] = {}
@@ -659,16 +664,10 @@ async def _startup() -> None:
         except Exception:
             pass
 
-# Simulated execution delays (seconds) per node type
-_EXEC_DELAYS: dict[str, float] = {
-    "trigger": 0.3, "agent": 1.2, "api": 0.7,
-    "transform": 0.4, "event": 0.2, "loop": 0.5, "subwf": 0.9,
-}
-
-
-async def _run_workflow(run_id: str) -> None:
+async def _run_workflow(run_id: str, input_data: dict[str, Any] | None = None) -> None:
     """Background task: walks the workflow DAG and executes each node."""
     from ui.backend.routes.workflows import _store as _wf_store
+    from ui.backend.engine import ExecutionContext, run_node as _engine_run_node
 
     run = _workflow_runs.get(run_id)
     if not run:
@@ -679,6 +678,14 @@ async def _run_workflow(run_id: str) -> None:
         run.status = "failed"
         run.error = "Workflow definition not found"
         return
+
+    # ── Execution context — shared mutable state flowing through the DAG ──────
+    ctx = ExecutionContext(
+        run_id=run_id,
+        workflow_id=run.workflow_id,
+        workflow_name=run.workflow_name,
+        data=dict(input_data or run.input_data or {}),
+    )
 
     # Build adjacency: node_id → outgoing edges
     edges_from: dict[str, list[Any]] = {}
@@ -837,15 +844,23 @@ async def _run_workflow(run_id: str) -> None:
                         payload={"node": node.name, "via": "timeout_auto_approve"},
                     )
 
-            elif node.node_type == "condition":
-                # Always take "yes" branch in simulation (real eval needs runtime context)
-                await asyncio.sleep(0.3)
-                next_port = "yes"
-                step.output = {"branch": "yes", "expression": node.config.get("Expression", "")}
+                # Annotate context with the HITL decision so downstream nodes
+                # can branch on it (e.g. ctx.hitl_approved == True)
+                ctx.set("hitl_approved", decision["approved"])
+                ctx.set("hitl_reviewer", decision["reviewer_id"])
+                run.context_snapshot = ctx.snapshot()
 
             else:
-                # Simulate realistic execution delay
-                await asyncio.sleep(_EXEC_DELAYS.get(node.node_type, 0.5))
+                # ── Real execution via engine ──────────────────────────────
+                result = await _engine_run_node(node, ctx, run_id)
+
+                if result.error:
+                    raise RuntimeError(result.error)
+
+                step.output = result.output
+                next_port = result.next_port
+                # Update live context snapshot — persisted by upsert_run below
+                run.context_snapshot = ctx.snapshot()
 
         except Exception as exc:
             step.status = "failed"
@@ -861,12 +876,14 @@ async def _run_workflow(run_id: str) -> None:
         step.completed_at = time.time()
         step.duration_ms = round((step.completed_at - step.started_at) * 1000)
 
+        # Truncate large outputs to keep audit events compact
+        _audit_output = {k: v for k, v in step.output.items() if not k.startswith("_")}
         audit_logger.log(
             EventType.TOOL_COMPLETED,
             f"wf:{run.workflow_id}",
             run_id,
             payload={"node": node.name, "node_type": node.node_type,
-                     "duration_ms": step.duration_ms, **step.output},
+                     "duration_ms": step.duration_ms, **_audit_output},
         )
         await broadcast({"type": "wf_step", "run_id": run_id,
                          "node_id": node_id, "status": "completed",
@@ -904,8 +921,25 @@ async def _run_workflow(run_id: str) -> None:
                      "status": run.status, "workflow_name": run.workflow_name})
 
 
+class ExecuteWorkflowPayload(BaseModel):
+    """Optional body for POST /api/workflows/{id}/execute.
+
+    ``input_data`` seeds the ExecutionContext so nodes can reference upstream
+    values immediately.  Example::
+
+        {"input_data": {"invoice_id": "INV-001", "amount_usd": 25000}}
+    """
+    input_data: dict[str, Any] = {}
+
+
 @app.post("/api/workflows/{workflow_id}/execute")
-async def execute_workflow(workflow_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+async def execute_workflow(
+    workflow_id: str,
+    background_tasks: BackgroundTasks,
+    payload: ExecuteWorkflowPayload | None = None,
+) -> dict[str, Any]:
+    if payload is None:
+        payload = ExecuteWorkflowPayload()
     from ui.backend.routes.workflows import _store as _wf_store
 
     wf = _wf_store.get(workflow_id)
@@ -919,18 +953,23 @@ async def execute_workflow(workflow_id: str, background_tasks: BackgroundTasks) 
         workflow_name=wf.name,
         status="running",
         started_at=time.time(),
+        input_data=payload.input_data,
     )
     _workflow_runs[run_id] = run
+
+    # Persist the initial run state to the DB
+    await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
 
     # Log workflow start to audit trail
     audit_logger.log(
         EventType.AGENT_STARTED,
         f"wf:{workflow_id}",
         run_id,
-        payload={"workflow": wf.name, "version": wf.version, "nodes": len(wf.nodes)},
+        payload={"workflow": wf.name, "version": wf.version, "nodes": len(wf.nodes),
+                 "input_keys": list(payload.input_data.keys())},
     )
 
-    background_tasks.add_task(_run_workflow, run_id)
+    background_tasks.add_task(_run_workflow, run_id, payload.input_data)
     return {"run_id": run_id, "status": "started"}
 
 
