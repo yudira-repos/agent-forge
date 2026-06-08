@@ -172,8 +172,7 @@ class AgentRuntime:
         """Invoke the agent and return a normalised result."""
         if self._state not in (AgentLifecycleState.RUNNING, AgentLifecycleState.CREATED):
             raise RuntimeError(
-                f"Cannot invoke agent in state {self._state.value}. "
-                "Call runtime.start() first."
+                f"Cannot invoke agent in state {self._state.value}. Call runtime.start() first."
             )
         self._state = AgentLifecycleState.RUNNING
         start = time.time()

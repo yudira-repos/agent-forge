@@ -42,6 +42,7 @@ class LangChainAdapter(RuntimeAdapter):
             return self._llm
         try:
             from langchain_openai import ChatOpenAI  # type: ignore
+
             self._llm = ChatOpenAI(**self._llm_kwargs)
         except ImportError as exc:
             raise ImportError(
@@ -85,6 +86,7 @@ class LangChainAdapter(RuntimeAdapter):
     def health_check(self) -> bool:
         try:
             import langchain_core  # type: ignore  # noqa: F401
+
             return True
         except ImportError:
             return False

@@ -79,12 +79,14 @@ class TestHITLOrchestrator:
         assert len(pending) == 1
         req = pending[0]
 
-        await orchestrator.decide(ApprovalDecision(
-            request_id=req.request_id,
-            reviewer_id="human-reviewer",
-            approved=True,
-            reason="Looks good",
-        ))
+        await orchestrator.decide(
+            ApprovalDecision(
+                request_id=req.request_id,
+                reviewer_id="human-reviewer",
+                approved=True,
+                reason="Looks good",
+            )
+        )
 
         decision = await asyncio.wait_for(task, timeout=2.0)
         assert decision.approved
@@ -98,12 +100,14 @@ class TestHITLOrchestrator:
         )
         await asyncio.sleep(0)
         pending = orchestrator.pending_requests()
-        await orchestrator.decide(ApprovalDecision(
-            request_id=pending[0].request_id,
-            reviewer_id="auditor",
-            approved=False,
-            reason="Not authorised",
-        ))
+        await orchestrator.decide(
+            ApprovalDecision(
+                request_id=pending[0].request_id,
+                reviewer_id="auditor",
+                approved=False,
+                reason="Not authorised",
+            )
+        )
         decision = await asyncio.wait_for(task, timeout=2.0)
         assert not decision.approved
 
@@ -119,6 +123,7 @@ class TestHITLOrchestrator:
 
         # Create an already-expired request directly to avoid wall-clock wait
         import time as _time
+
         req = ApprovalRequest.create("a", "r", "act", "res", timeout_seconds=0)
         req.expires_at = _time.time() - 1  # force expired
         orchestrator._pending[req.request_id] = req

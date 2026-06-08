@@ -1,7 +1,5 @@
 """Tests for the Auditability SDK."""
 
-
-
 from agentforge.audit import (
     AuditLogger,
     AuditQuery,
@@ -55,8 +53,7 @@ class TestAuditTrail:
 
         self.logger.log(EventType.AGENT_STARTED, "agent-1", "run-A")
         self.logger.log(EventType.TOOL_INVOKED, "agent-1", "run-A")
-        self.logger.log(EventType.POLICY_DENIED, "agent-1", "run-A",
-                        severity=EventSeverity.WARNING)
+        self.logger.log(EventType.POLICY_DENIED, "agent-1", "run-A", severity=EventSeverity.WARNING)
         self.logger.log(EventType.AGENT_STARTED, "agent-2", "run-B")
 
     def test_query_by_agent(self):
@@ -70,8 +67,10 @@ class TestAuditTrail:
 
     def test_query_min_severity(self):
         results = self.trail.query(AuditQuery(min_severity=EventSeverity.WARNING))
-        assert all(e.severity in (EventSeverity.WARNING, EventSeverity.ERROR, EventSeverity.CRITICAL)
-                   for e in results)
+        assert all(
+            e.severity in (EventSeverity.WARNING, EventSeverity.ERROR, EventSeverity.CRITICAL)
+            for e in results
+        )
 
     def test_timeline_is_chronological(self):
         timeline = self.trail.timeline("run-A")

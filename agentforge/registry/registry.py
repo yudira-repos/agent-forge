@@ -92,9 +92,7 @@ class SQLiteBackend(RegistryBackend):
         return self._from_json(json.loads(row[0]))
 
     def delete(self, agent_id: str) -> bool:
-        cur = self._conn.execute(
-            "DELETE FROM agents WHERE agent_id = ?", (agent_id,)
-        )
+        cur = self._conn.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
         self._conn.commit()
         return cur.rowcount > 0
 
@@ -105,6 +103,7 @@ class SQLiteBackend(RegistryBackend):
     @staticmethod
     def _from_json(data: dict[str, Any]) -> AgentManifest:
         from .models import AgentCapability
+
         caps = [
             AgentCapability(
                 name=c["name"],

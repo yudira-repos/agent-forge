@@ -54,13 +54,16 @@ class DelegationToken:
     ) -> "DelegationToken":
         now = time.time()
         token_id = str(uuid.uuid4())
+        sorted_scopes = sorted(scopes)
+        issued_at = now
+        expires_at = now + ttl
         payload = {
             "token_id": token_id,
             "delegator_id": delegator_id,
             "delegate_id": delegate_id,
-            "scopes": sorted(scopes),
-            "issued_at": now,
-            "expires_at": now + ttl,
+            "scopes": sorted_scopes,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
             "parent_token_id": parent_token_id,
         }
         sig = hmac.new(
@@ -68,7 +71,16 @@ class DelegationToken:
             json.dumps(payload, sort_keys=True).encode(),
             hashlib.sha256,
         ).hexdigest()
-        return cls(**payload, signature=sig)
+        return cls(
+            token_id=token_id,
+            delegator_id=delegator_id,
+            delegate_id=delegate_id,
+            scopes=sorted_scopes,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            parent_token_id=parent_token_id,
+            signature=sig,
+        )
 
     def verify(self, secret: bytes) -> bool:
         """Verify signature and expiry."""

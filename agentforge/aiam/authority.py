@@ -38,9 +38,7 @@ class AuthorityScope:
     def __post_init__(self) -> None:
         parts = self.scope.split(":")
         if len(parts) != 2:
-            raise ValueError(
-                f"Invalid scope '{self.scope}'. Must be 'resource:action'."
-            )
+            raise ValueError(f"Invalid scope '{self.scope}'. Must be 'resource:action'.")
 
     @property
     def resource(self) -> str:
@@ -93,8 +91,7 @@ class AgentAuthority:
                 return False
         # At least one allow must match
         return any(
-            s.effect == ScopeEffect.ALLOW and s.matches(resource, action)
-            for s in self.scopes
+            s.effect == ScopeEffect.ALLOW and s.matches(resource, action) for s in self.scopes
         )
 
     def grant(self, *scopes: AuthorityScope) -> "AgentAuthority":

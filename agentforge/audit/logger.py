@@ -122,28 +122,44 @@ class AuditLogger:
         return event
 
     # Convenience methods for common event types
-    def tool_invoked(self, agent_id: str, correlation_id: str, tool: str, **kwargs: Any) -> AuditEvent:
+    def tool_invoked(
+        self, agent_id: str, correlation_id: str, tool: str, **kwargs: Any
+    ) -> AuditEvent:
         return self.log(
-            EventType.TOOL_INVOKED, agent_id, correlation_id,
+            EventType.TOOL_INVOKED,
+            agent_id,
+            correlation_id,
             payload={"tool": tool, **kwargs},
         )
 
-    def tool_completed(self, agent_id: str, correlation_id: str, tool: str, duration_ms: float, **kwargs: Any) -> AuditEvent:
+    def tool_completed(
+        self, agent_id: str, correlation_id: str, tool: str, duration_ms: float, **kwargs: Any
+    ) -> AuditEvent:
         return self.log(
-            EventType.TOOL_COMPLETED, agent_id, correlation_id,
+            EventType.TOOL_COMPLETED,
+            agent_id,
+            correlation_id,
             payload={"tool": tool, "duration_ms": duration_ms, **kwargs},
         )
 
-    def policy_denied(self, agent_id: str, correlation_id: str, rules: list[str], context: dict[str, Any]) -> AuditEvent:
+    def policy_denied(
+        self, agent_id: str, correlation_id: str, rules: list[str], context: dict[str, Any]
+    ) -> AuditEvent:
         return self.log(
-            EventType.POLICY_DENIED, agent_id, correlation_id,
+            EventType.POLICY_DENIED,
+            agent_id,
+            correlation_id,
             payload={"denied_by": rules, "context": context},
             severity=EventSeverity.WARNING,
         )
 
-    def hitl_requested(self, agent_id: str, correlation_id: str, request_id: str, reason: str) -> AuditEvent:
+    def hitl_requested(
+        self, agent_id: str, correlation_id: str, request_id: str, reason: str
+    ) -> AuditEvent:
         return self.log(
-            EventType.HITL_REQUESTED, agent_id, correlation_id,
+            EventType.HITL_REQUESTED,
+            agent_id,
+            correlation_id,
             payload={"request_id": request_id, "reason": reason},
             severity=EventSeverity.WARNING,
         )

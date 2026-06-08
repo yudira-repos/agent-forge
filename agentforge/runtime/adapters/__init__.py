@@ -25,10 +25,7 @@ def get_adapter(name: str, **kwargs):
     """
     cls = _ADAPTER_MAP.get(name.lower())
     if cls is None:
-        raise ValueError(
-            f"Unknown adapter '{name}'. "
-            f"Available: {list(_ADAPTER_MAP.keys())}"
-        )
+        raise ValueError(f"Unknown adapter '{name}'. Available: {list(_ADAPTER_MAP.keys())}")
     return cls(**kwargs)
 
 

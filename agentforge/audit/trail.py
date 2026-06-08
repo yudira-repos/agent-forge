@@ -75,7 +75,7 @@ class AuditTrail:
                 continue
             results.append(event)
 
-        return results[:q.limit]
+        return results[: q.limit]
 
     def timeline(self, correlation_id: str) -> list[AuditEvent]:
         """Return all events for a correlation_id in chronological order."""
@@ -92,31 +92,35 @@ class AuditTrail:
         events = self.timeline(correlation_id)
         steps = []
         for i, event in enumerate(events):
-            steps.append({
-                "step": i + 1,
-                "event_id": event.event_id,
-                "type": event.event_type.value,
-                "agent": event.agent_id,
-                "timestamp": event.timestamp,
-                "severity": event.severity.value,
-                "payload": event.payload,
-                "links_to": event.previous_event_id,
-            })
+            steps.append(
+                {
+                    "step": i + 1,
+                    "event_id": event.event_id,
+                    "type": event.event_type.value,
+                    "agent": event.agent_id,
+                    "timestamp": event.timestamp,
+                    "severity": event.severity.value,
+                    "payload": event.payload,
+                    "links_to": event.previous_event_id,
+                }
+            )
         return steps
 
     def violations(self, since: float | None = None) -> list[AuditEvent]:
         """Return all DENY and HITL events (for compliance reporting)."""
-        return self.query(AuditQuery(
-            event_types=[
-                EventType.POLICY_DENIED,
-                EventType.HITL_REQUESTED,
-                EventType.HITL_ESCALATED,
-                EventType.CREDENTIAL_REJECTED,
-            ],
-            min_severity=EventSeverity.WARNING,
-            since=since,
-            limit=10_000,
-        ))
+        return self.query(
+            AuditQuery(
+                event_types=[
+                    EventType.POLICY_DENIED,
+                    EventType.HITL_REQUESTED,
+                    EventType.HITL_ESCALATED,
+                    EventType.CREDENTIAL_REJECTED,
+                ],
+                min_severity=EventSeverity.WARNING,
+                since=since,
+                limit=10_000,
+            )
+        )
 
     def stats(self) -> dict[str, Any]:
         events = self._sink.events

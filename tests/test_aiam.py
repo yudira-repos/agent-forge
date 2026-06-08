@@ -1,6 +1,5 @@
 """Tests for AIAM — Agent Identity & Authority Management."""
 
-
 import pytest
 
 from agentforge.aiam import (
@@ -20,6 +19,7 @@ from agentforge.aiam import (
 # AgentIdentity
 # ---------------------------------------------------------------------------
 
+
 class TestAgentIdentity:
     def test_create_assigns_stable_uuid(self):
         a = AgentIdentity.create("my-agent", roles=["operator"], owner="team-a")
@@ -36,6 +36,7 @@ class TestAgentIdentity:
 # ---------------------------------------------------------------------------
 # AgentCredential
 # ---------------------------------------------------------------------------
+
 
 class TestAgentCredential:
     SECRET = b"test-signing-key"
@@ -60,6 +61,7 @@ class TestAgentCredential:
 # ---------------------------------------------------------------------------
 # AuthorityScope & AgentAuthority
 # ---------------------------------------------------------------------------
+
 
 class TestAgentAuthority:
     def test_allow_scope_grants_access(self):
@@ -96,6 +98,7 @@ class TestAgentAuthority:
 # RBAC
 # ---------------------------------------------------------------------------
 
+
 class TestRBACPolicy:
     def test_baseline_viewer_can_read_agents(self):
         policy = RBACPolicy.enterprise_baseline()
@@ -125,6 +128,7 @@ class TestRBACPolicy:
 # ---------------------------------------------------------------------------
 # TrustChain
 # ---------------------------------------------------------------------------
+
 
 class TestTrustChain:
     SECRET = b"chain-secret"

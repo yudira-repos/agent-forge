@@ -7,18 +7,18 @@ from enum import Enum
 
 
 class EscalationTier(str, Enum):
-    L1 = "l1"          # First-line reviewer (team lead)
-    L2 = "l2"          # Manager
-    L3 = "l3"          # Executive / CISO
+    L1 = "l1"  # First-line reviewer (team lead)
+    L2 = "l2"  # Manager
+    L3 = "l3"  # Executive / CISO
     EMERGENCY = "emergency"  # 24/7 on-call
 
 
 @dataclass
 class EscalationLevel:
     tier: EscalationTier
-    reviewer_group: str   # e.g. "finance-leads", "security-oncall"
+    reviewer_group: str  # e.g. "finance-leads", "security-oncall"
     timeout_seconds: int  # time before escalating to next tier
-    notify: list[str] = field(default_factory=list)   # email / Slack handles
+    notify: list[str] = field(default_factory=list)  # email / Slack handles
 
 
 @dataclass

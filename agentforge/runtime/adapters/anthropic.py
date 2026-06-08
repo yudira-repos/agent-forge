@@ -59,9 +59,7 @@ class AnthropicAdapter(RuntimeAdapter):
     async def invoke(self, context: AgentContext) -> AgentResult:
         client = self._get_client()
 
-        messages = list(context.history) + [
-            {"role": "user", "content": context.prompt}
-        ]
+        messages = list(context.history) + [{"role": "user", "content": context.prompt}]
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -82,11 +80,13 @@ class AnthropicAdapter(RuntimeAdapter):
             if block.type == "text":
                 content_text += block.text
             elif block.type == "tool_use":
-                tool_calls.append({
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input,
-                })
+                tool_calls.append(
+                    {
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    }
+                )
 
         return AgentResult(
             content=content_text,
@@ -104,6 +104,7 @@ class AnthropicAdapter(RuntimeAdapter):
     def health_check(self) -> bool:
         try:
             import anthropic  # type: ignore  # noqa: F401
+
             return True
         except ImportError:
             return False

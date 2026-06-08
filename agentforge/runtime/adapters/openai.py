@@ -60,9 +60,7 @@ class OpenAIAdapter(RuntimeAdapter):
     async def invoke(self, context: AgentContext) -> AgentResult:
         client = self._get_client()
 
-        messages = list(context.history) + [
-            {"role": "user", "content": context.prompt}
-        ]
+        messages = list(context.history) + [{"role": "user", "content": context.prompt}]
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -71,9 +69,7 @@ class OpenAIAdapter(RuntimeAdapter):
             "temperature": context.temperature,
         }
         if context.tools:
-            kwargs["tools"] = [
-                {"type": "function", "function": t} for t in context.tools
-            ]
+            kwargs["tools"] = [{"type": "function", "function": t} for t in context.tools]
             kwargs["tool_choice"] = "auto"
 
         response = await client.chat.completions.create(**kwargs)
@@ -83,12 +79,15 @@ class OpenAIAdapter(RuntimeAdapter):
         tool_calls = []
         if message.tool_calls:
             import json
+
             for tc in message.tool_calls:
-                tool_calls.append({
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "input": json.loads(tc.function.arguments),
-                })
+                tool_calls.append(
+                    {
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                    }
+                )
 
         return AgentResult(
             content=message.content or "",
@@ -106,6 +105,7 @@ class OpenAIAdapter(RuntimeAdapter):
     def health_check(self) -> bool:
         try:
             import openai  # type: ignore  # noqa: F401
+
             return True
         except ImportError:
             return False

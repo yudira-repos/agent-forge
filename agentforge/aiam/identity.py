@@ -104,11 +104,15 @@ class AgentCredential:
     ) -> "AgentCredential":
         """Issue a signed credential for *identity* valid for *ttl* seconds."""
         now = time.time()
+        agent_id: str = identity.agent_id
+        issued_at: float = now
+        expires_at: float = now + ttl
+        sorted_scopes: list[str] = sorted(scopes)
         payload = {
-            "agent_id": identity.agent_id,
-            "issued_at": now,
-            "expires_at": now + ttl,
-            "scopes": sorted(scopes),
+            "agent_id": agent_id,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "scopes": sorted_scopes,
         }
         token = hmac.new(
             secret,
@@ -116,10 +120,10 @@ class AgentCredential:
             hashlib.sha256,
         ).hexdigest()
         return cls(
-            agent_id=payload["agent_id"],
-            issued_at=payload["issued_at"],
-            expires_at=payload["expires_at"],
-            scopes=payload["scopes"],
+            agent_id=agent_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            scopes=sorted_scopes,
             token=token,
         )
 

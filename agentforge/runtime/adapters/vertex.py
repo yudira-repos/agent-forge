@@ -95,6 +95,7 @@ class VertexAdapter(RuntimeAdapter):
     def health_check(self) -> bool:
         try:
             import vertexai  # type: ignore  # noqa: F401
+
             return True
         except ImportError:
             return False

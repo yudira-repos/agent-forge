@@ -78,7 +78,9 @@ class RBACPolicy:
     def get_role(self, name: str) -> Role | None:
         return self._roles.get(name)
 
-    def effective_permissions(self, role_name: str, _visited: set[str] | None = None) -> set[Permission]:
+    def effective_permissions(
+        self, role_name: str, _visited: set[str] | None = None
+    ) -> set[Permission]:
         """Resolve all permissions for a role, including inherited ones."""
         visited = _visited or set()
         if role_name in visited:
@@ -120,43 +122,51 @@ class RBACPolicy:
         Roles: viewer → operator → supervisor → admin
         """
         policy = cls()
-        policy.define_role(Role(
-            "viewer",
-            permissions={
-                Permission("agents", "list"),
-                Permission("agents", "read"),
-                Permission("audit-logs", "read"),
-            },
-            description="Read-only access to agent state and audit logs",
-        ))
-        policy.define_role(Role(
-            "operator",
-            permissions={
-                Permission("agents", "invoke"),
-                Permission("agents", "pause"),
-            },
-            extends=["viewer"],
-            description="Can invoke and pause agents",
-        ))
-        policy.define_role(Role(
-            "supervisor",
-            permissions={
-                Permission("hitl", "approve"),
-                Permission("hitl", "reject"),
-                Permission("agents", "terminate"),
-            },
-            extends=["operator"],
-            description="Can make HITL decisions and terminate agents",
-        ))
-        policy.define_role(Role(
-            "admin",
-            permissions={
-                Permission("agents", "register"),
-                Permission("agents", "delete"),
-                Permission("policy", "write"),
-                Permission("registry", "write"),
-            },
-            extends=["supervisor"],
-            description="Full administrative access",
-        ))
+        policy.define_role(
+            Role(
+                "viewer",
+                permissions={
+                    Permission("agents", "list"),
+                    Permission("agents", "read"),
+                    Permission("audit-logs", "read"),
+                },
+                description="Read-only access to agent state and audit logs",
+            )
+        )
+        policy.define_role(
+            Role(
+                "operator",
+                permissions={
+                    Permission("agents", "invoke"),
+                    Permission("agents", "pause"),
+                },
+                extends=["viewer"],
+                description="Can invoke and pause agents",
+            )
+        )
+        policy.define_role(
+            Role(
+                "supervisor",
+                permissions={
+                    Permission("hitl", "approve"),
+                    Permission("hitl", "reject"),
+                    Permission("agents", "terminate"),
+                },
+                extends=["operator"],
+                description="Can make HITL decisions and terminate agents",
+            )
+        )
+        policy.define_role(
+            Role(
+                "admin",
+                permissions={
+                    Permission("agents", "register"),
+                    Permission("agents", "delete"),
+                    Permission("policy", "write"),
+                    Permission("registry", "write"),
+                },
+                extends=["supervisor"],
+                description="Full administrative access",
+            )
+        )
         return policy

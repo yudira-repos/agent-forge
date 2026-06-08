@@ -12,7 +12,7 @@ class PolicyEffect(str, Enum):
     ALLOW = "allow"
     DENY = "deny"
     REQUIRE_HITL = "require_hitl"  # escalate to human review
-    AUDIT = "audit"               # allow but record
+    AUDIT = "audit"  # allow but record
 
 
 @dataclass
@@ -140,8 +140,8 @@ class Policy:
                 name=f"block-{action}-in-{env}",
                 effect=PolicyEffect.DENY,
                 conditions=[
-                    lambda ctx, a=action: ctx.action == a,
-                    lambda ctx, e=env: ctx.environment == e,
+                    lambda ctx, a=action: ctx.action == a,  # type: ignore[misc]
+                    lambda ctx, e=env: ctx.environment == e,  # type: ignore[misc]
                 ],
                 description=f"Block '{action}' in {env}",
                 priority=10,
@@ -153,9 +153,7 @@ class Policy:
     @classmethod
     def resource_allowlist(cls, allowed_resources: list[str]) -> "Policy":
         """Only allow access to explicitly listed resources."""
-        pattern = re.compile(
-            "^(" + "|".join(re.escape(r) for r in allowed_resources) + ")$"
-        )
+        pattern = re.compile("^(" + "|".join(re.escape(r) for r in allowed_resources) + ")$")
         rule = PolicyRule(
             name="deny-unlisted-resources",
             effect=PolicyEffect.DENY,

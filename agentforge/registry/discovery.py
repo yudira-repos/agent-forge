@@ -80,10 +80,7 @@ class AgentDiscovery:
         )
 
         if query.require_hitl is not None:
-            manifests = [
-                m for m in manifests
-                if self._has_hitl_capability(m) == query.require_hitl
-            ]
+            manifests = [m for m in manifests if self._has_hitl_capability(m) == query.require_hitl]
 
         return DiscoveryResult(
             query=query,

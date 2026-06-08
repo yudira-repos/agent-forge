@@ -80,7 +80,14 @@ exclude = ["ui/", "tests/"]
 
 [tool.coverage.run]
 source = ["agentforge"]
-omit = ["tests/*"]
+omit = [
+    "tests/*",
+    # Adapters require real API keys — tested via integration tests, not unit CI
+    "agentforge/runtime/adapters/anthropic.py",
+    "agentforge/runtime/adapters/openai.py",
+    "agentforge/runtime/adapters/langchain.py",
+    "agentforge/runtime/adapters/vertex.py",
+]
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]

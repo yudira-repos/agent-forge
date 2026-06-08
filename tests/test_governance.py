@@ -1,6 +1,5 @@
 """Tests for the Governance framework."""
 
-
 from agentforge.governance import (
     GDPRProfile,
     HIPAAProfile,
@@ -13,7 +12,9 @@ from agentforge.governance import (
 from agentforge.governance.policy import Policy
 
 
-def ctx(action: str, resource: str, roles: list[str] | None = None, env: str = "production", **meta) -> PolicyContext:
+def ctx(
+    action: str, resource: str, roles: list[str] | None = None, env: str = "production", **meta
+) -> PolicyContext:
     return PolicyContext(
         agent_id="test-agent",
         agent_roles=roles or ["operator"],
@@ -33,11 +34,13 @@ class TestPolicyEngine:
     def test_deny_rule_blocks(self):
         engine = PolicyEngine()
         policy = Policy("block-delete")
-        policy.add_rule(PolicyRule(
-            name="deny-all-delete",
-            effect=PolicyEffect.DENY,
-            conditions=[lambda c: c.action == "delete"],
-        ))
+        policy.add_rule(
+            PolicyRule(
+                name="deny-all-delete",
+                effect=PolicyEffect.DENY,
+                conditions=[lambda c: c.action == "delete"],
+            )
+        )
         engine.add_policy(policy)
         decision = engine.evaluate(ctx("delete", "invoices"))
         assert decision.is_denied
@@ -45,14 +48,16 @@ class TestPolicyEngine:
     def test_hitl_rule_triggers(self):
         engine = PolicyEngine()
         policy = Policy("hitl-large-amounts")
-        policy.add_rule(PolicyRule(
-            name="hitl-over-10k",
-            effect=PolicyEffect.REQUIRE_HITL,
-            conditions=[
-                lambda c: c.action == "initiate",
-                lambda c: c.get("amount_usd", 0) > 10_000,
-            ],
-        ))
+        policy.add_rule(
+            PolicyRule(
+                name="hitl-over-10k",
+                effect=PolicyEffect.REQUIRE_HITL,
+                conditions=[
+                    lambda c: c.action == "initiate",
+                    lambda c: c.get("amount_usd", 0) > 10_000,
+                ],
+            )
+        )
         engine.add_policy(policy)
 
         low = ctx("initiate", "payments", amount_usd=5_000)
@@ -65,7 +70,9 @@ class TestPolicyEngine:
         p1 = Policy("deny")
         p1.add_rule(PolicyRule("always-deny", PolicyEffect.DENY, [lambda _: True], priority=10))
         p2 = Policy("hitl")
-        p2.add_rule(PolicyRule("always-hitl", PolicyEffect.REQUIRE_HITL, [lambda _: True], priority=20))
+        p2.add_rule(
+            PolicyRule("always-hitl", PolicyEffect.REQUIRE_HITL, [lambda _: True], priority=20)
+        )
         engine.add_policy(p1)
         engine.add_policy(p2)
         assert engine.evaluate(ctx("read", "anything")).is_denied
@@ -134,8 +141,10 @@ class TestGDPRProfile:
     def test_cross_border_transfer_is_audited(self):
         engine = GDPRProfile.engine()
         c = PolicyContext(
-            agent_id="x", agent_roles=["operator"],
-            action="transfer", resource="user-records",
+            agent_id="x",
+            agent_roles=["operator"],
+            action="transfer",
+            resource="user-records",
             environment="production",
             metadata={"cross_border_transfer": True},
         )

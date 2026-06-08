@@ -1,6 +1,5 @@
 """Tests for the Agent Registry."""
 
-
 from agentforge.registry import (
     AgentCapability,
     AgentManifest,
@@ -12,7 +11,9 @@ from agentforge.registry.discovery import AgentDiscovery
 from agentforge.registry.registry import SQLiteBackend
 
 
-def make_manifest(agent_id: str, tags: list[str] | None = None, owner: str = "team") -> AgentManifest:
+def make_manifest(
+    agent_id: str, tags: list[str] | None = None, owner: str = "team"
+) -> AgentManifest:
     return AgentManifest(
         agent_id=agent_id,
         name=f"Agent {agent_id}",

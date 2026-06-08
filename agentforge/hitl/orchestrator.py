@@ -108,9 +108,7 @@ class HITLOrchestrator:
         if request is None or request.is_resolved:
             return
 
-        request.status = (
-            ApprovalStatus.APPROVED if decision.approved else ApprovalStatus.REJECTED
-        )
+        request.status = ApprovalStatus.APPROVED if decision.approved else ApprovalStatus.REJECTED
         request.reviewer_id = decision.reviewer_id
         request.resolved_at = decision.decided_at
         request.reason = decision.reason
