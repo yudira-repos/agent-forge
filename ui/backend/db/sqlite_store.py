@@ -42,8 +42,12 @@ if _PG:
     async def _pool() -> asyncpg.Pool:  # type: ignore
         global _pg_pool
         if _pg_pool is None:
-            # Railway sometimes uses postgres:// scheme; asyncpg accepts both
-            url = _DATABASE_URL.replace("postgres://", "postgresql://", 1)
+            # Strip SQLAlchemy driver suffix and normalise scheme.
+            # Railway injects postgresql+asyncpg:// (SQLAlchemy-style);
+            # asyncpg only accepts postgresql:// or postgres://
+            import re as _re
+            url = _re.sub(r'\+\w+', '', _DATABASE_URL)   # postgresql+asyncpg → postgresql
+            url = url.replace("postgres://", "postgresql://", 1)
             _pg_pool = await asyncpg.create_pool(url, min_size=1, max_size=5)
         return _pg_pool
 
