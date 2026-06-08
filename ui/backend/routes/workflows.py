@@ -78,7 +78,7 @@ def _seed() -> None:
             WFNode(node_id="n1", node_type="trigger",   name="Invoice received",  x=15,   y=165, detail="POST /webhook/invoice",
                    config={"Method": "POST", "Path": "/webhook/invoice", "Auth": "HMAC-SHA256", "Schema": "InvoiceEvent v1"}),
             WFNode(node_id="n2", node_type="agent",     name="Extract invoice",   x=185,  y=165, detail="invoice-extractor · v2.1",
-                   config={"Agent ID": "invoice-extractor-001", "Model": "claude-opus-4-5", "Output": "vendor_id, amount, items"}),
+                   config={"Agent ID": "invoice-extractor-001", "Model": "claude-opus-4-5", "Output": "vendor_id, amount_usd, items"}),
             WFNode(node_id="n3", node_type="api",       name="Validate vendor",   x=355,  y=165, detail="GET /vendors/{id} · SAP",
                    config={"URL": "sap.internal/vendors/{vendor_id}", "Method": "GET", "Auth": "Bearer", "Timeout": "5000ms"}),
             WFNode(node_id="n4", node_type="condition", name="Amount > $10k?",    x=525,  y=165, detail="amount_usd > 10000",
