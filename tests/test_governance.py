@@ -1,12 +1,10 @@
 """Tests for the Governance framework."""
 
-import pytest
 
 from agentforge.governance import (
     GDPRProfile,
     HIPAAProfile,
     PolicyContext,
-    PolicyDecision,
     PolicyEffect,
     PolicyEngine,
     PolicyRule,

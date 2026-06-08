@@ -7,7 +7,6 @@ import pytest
 from agentforge.hitl import (
     ApprovalDecision,
     ApprovalRequest,
-    ApprovalStatus,
     EscalationPolicy,
     EscalationTier,
     HITLOrchestrator,

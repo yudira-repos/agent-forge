@@ -52,7 +52,7 @@ class LangChainAdapter(RuntimeAdapter):
 
     async def invoke(self, context: AgentContext) -> AgentResult:
         try:
-            from langchain_core.messages import HumanMessage, AIMessage  # type: ignore
+            from langchain_core.messages import HumanMessage  # type: ignore
         except ImportError as exc:
             raise ImportError(
                 "langchain-core is required for LangChainAdapter. "
@@ -84,7 +84,7 @@ class LangChainAdapter(RuntimeAdapter):
 
     def health_check(self) -> bool:
         try:
-            import langchain_core  # type: ignore
+            import langchain_core  # type: ignore  # noqa: F401
             return True
         except ImportError:
             return False

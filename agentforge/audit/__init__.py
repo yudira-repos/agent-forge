@@ -5,9 +5,9 @@ Structured, tamper-evident audit logging for every agent action, decision,
 and state transition. Built for compliance teams and incident forensics.
 """
 
-from .events import AuditEvent, EventType, EventSeverity
-from .logger import AuditLogger, ConsoleAuditSink, FileAuditSink, AuditSink
-from .trail import AuditTrail, AuditQuery
+from .events import AuditEvent, EventSeverity, EventType
+from .logger import AuditLogger, AuditSink, ConsoleAuditSink, FileAuditSink
+from .trail import AuditQuery, AuditTrail
 
 __all__ = [
     "AuditEvent",

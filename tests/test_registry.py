@@ -1,6 +1,5 @@
 """Tests for the Agent Registry."""
 
-import pytest
 
 from agentforge.registry import (
     AgentCapability,

@@ -1,13 +1,12 @@
 """Tests for AIAM — Agent Identity & Authority Management."""
 
-import time
 
 import pytest
 
 from agentforge.aiam import (
+    AgentAuthority,
     AgentCredential,
     AgentIdentity,
-    AgentAuthority,
     AuthorityScope,
     DelegationToken,
     Permission,
@@ -16,7 +15,6 @@ from agentforge.aiam import (
     ScopeEffect,
     TrustChain,
 )
-
 
 # ---------------------------------------------------------------------------
 # AgentIdentity

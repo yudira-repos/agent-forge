@@ -105,7 +105,7 @@ class OpenAIAdapter(RuntimeAdapter):
 
     def health_check(self) -> bool:
         try:
-            import openai  # type: ignore
+            import openai  # type: ignore  # noqa: F401
             return True
         except ImportError:
             return False

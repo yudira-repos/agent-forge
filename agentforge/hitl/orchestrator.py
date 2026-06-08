@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 from .approvals import (
     ApprovalDecision,
@@ -12,7 +12,6 @@ from .approvals import (
     ApprovalStatus,
 )
 from .escalation import EscalationPolicy
-
 
 # Callback type: receives an ApprovalRequest and sends it to reviewers
 NotifyCallback = Callable[[ApprovalRequest, str], Awaitable[None]]

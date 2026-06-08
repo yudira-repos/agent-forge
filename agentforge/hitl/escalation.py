@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
 
 
 class EscalationTier(str, Enum):
@@ -58,7 +56,7 @@ class EscalationPolicy:
         return None  # exhausted all tiers
 
     def is_exhausted(self, request_age_seconds: float) -> bool:
-        total = sum(l.timeout_seconds for l in self.levels)
+        total = sum(lvl.timeout_seconds for lvl in self.levels)
         return request_age_seconds >= total
 
     @classmethod

@@ -5,9 +5,9 @@ Policy engine, compliance profiles, and capability allow/deny lists for
 enterprise-grade agent governance.
 """
 
-from .policy import Policy, PolicyRule, PolicyEffect, PolicyContext
-from .engine import PolicyEngine, PolicyDecision
-from .profiles import ComplianceProfile, SOC2Profile, HIPAAProfile, GDPRProfile
+from .engine import PolicyDecision, PolicyEngine
+from .policy import Policy, PolicyContext, PolicyEffect, PolicyRule
+from .profiles import ComplianceProfile, GDPRProfile, HIPAAProfile, SOC2Profile
 
 __all__ = [
     "Policy",

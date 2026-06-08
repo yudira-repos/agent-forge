@@ -59,14 +59,7 @@ class VertexAdapter(RuntimeAdapter):
         return self._client
 
     async def invoke(self, context: AgentContext) -> AgentResult:
-        try:
-            from vertexai.generative_models import Content, Part  # type: ignore
-        except ImportError as exc:
-            raise ImportError(
-                "google-cloud-aiplatform is required for VertexAdapter."
-            ) from exc
-
-        model = self._get_client()
+        model = self._get_client()  # raises ImportError with a helpful message if not installed
 
         # Convert tools to Vertex function declarations if provided
         generation_config = {
@@ -101,7 +94,7 @@ class VertexAdapter(RuntimeAdapter):
 
     def health_check(self) -> bool:
         try:
-            import vertexai  # type: ignore
+            import vertexai  # type: ignore  # noqa: F401
             return True
         except ImportError:
             return False

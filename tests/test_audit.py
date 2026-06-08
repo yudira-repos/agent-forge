@@ -1,11 +1,8 @@
 """Tests for the Auditability SDK."""
 
-import time
 
-import pytest
 
 from agentforge.audit import (
-    AuditEvent,
     AuditLogger,
     AuditQuery,
     AuditTrail,
@@ -33,7 +30,7 @@ class TestAuditLogger:
     def test_different_correlations_dont_chain(self):
         sink = InMemoryAuditSink()
         logger = AuditLogger(sinks=[sink])
-        e1 = logger.log(EventType.AGENT_STARTED, "agent-1", "run-A")
+        logger.log(EventType.AGENT_STARTED, "agent-1", "run-A")
         e2 = logger.log(EventType.AGENT_STARTED, "agent-1", "run-B")
         assert e2.previous_event_id is None
 

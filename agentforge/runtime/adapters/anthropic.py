@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from ..base import AgentContext, AgentResult, RuntimeAdapter
@@ -104,7 +103,7 @@ class AnthropicAdapter(RuntimeAdapter):
 
     def health_check(self) -> bool:
         try:
-            import anthropic  # type: ignore
+            import anthropic  # type: ignore  # noqa: F401
             return True
         except ImportError:
             return False

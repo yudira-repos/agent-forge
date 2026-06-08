@@ -1,8 +1,8 @@
 """Provider adapters — Anthropic, OpenAI, LangChain, Vertex."""
 
 from .anthropic import AnthropicAdapter
-from .openai import OpenAIAdapter
 from .langchain import LangChainAdapter
+from .openai import OpenAIAdapter
 from .vertex import VertexAdapter
 
 _ADAPTER_MAP = {

@@ -181,7 +181,7 @@ class AgentRuntime:
             result = await self._adapter.invoke(context)
             result.duration_ms = (time.time() - start) * 1000
             return result
-        except Exception as exc:
+        except Exception:
             self._state = AgentLifecycleState.FAILED
             raise
 
