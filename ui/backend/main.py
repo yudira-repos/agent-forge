@@ -43,6 +43,36 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # ── Routers ───────────────────────────────────────────────────────────────────
 from ui.backend.routes.workflows import router as workflows_router  # noqa: E402
 from ui.backend.db import sqlite_store  # noqa: E402
+
+# IMPORTANT: register /api/workflows/runs* routes BEFORE including the
+# workflows router.  The router has GET /api/workflows/{workflow_id} which
+# Starlette matches in registration order — it would swallow "runs" as a
+# workflow_id if registered first.
+@app.get("/api/workflows/runs")
+def list_workflow_runs(workflow_id: str | None = None) -> list[dict[str, Any]]:
+    runs = list(_workflow_runs.values())
+    if workflow_id:
+        runs = [r for r in runs if r.workflow_id == workflow_id]
+    return [r.model_dump() for r in sorted(runs, key=lambda r: r.started_at, reverse=True)]
+
+
+@app.get("/api/workflows/runs/{run_id}")
+def get_workflow_run(run_id: str) -> dict[str, Any]:
+    run = _workflow_runs.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run.model_dump()
+
+
+@app.get("/api/workflows/runs/{run_id}/audit")
+def get_run_audit(run_id: str) -> list[dict[str, Any]]:
+    """All audit events for a specific workflow run (matched by correlation_id = run_id)."""
+    from agentforge.audit import AuditQuery
+    q = AuditQuery(correlation_id=run_id, limit=200)
+    events = audit_trail.query(q)
+    return [_fmt_event(e) for e in sorted(events, key=lambda e: e.timestamp)]
+
+
 app.include_router(workflows_router)
 
 # ── Health endpoints (liveness + readiness) ───────────────────────────────────
@@ -902,31 +932,6 @@ async def execute_workflow(workflow_id: str, background_tasks: BackgroundTasks) 
 
     background_tasks.add_task(_run_workflow, run_id)
     return {"run_id": run_id, "status": "started"}
-
-
-@app.get("/api/workflows/runs")
-def list_workflow_runs(workflow_id: str | None = None) -> list[dict[str, Any]]:
-    runs = list(_workflow_runs.values())
-    if workflow_id:
-        runs = [r for r in runs if r.workflow_id == workflow_id]
-    return [r.model_dump() for r in sorted(runs, key=lambda r: r.started_at, reverse=True)]
-
-
-@app.get("/api/workflows/runs/{run_id}")
-def get_workflow_run(run_id: str) -> dict[str, Any]:
-    run = _workflow_runs.get(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return run.model_dump()
-
-
-@app.get("/api/workflows/runs/{run_id}/audit")
-def get_run_audit(run_id: str) -> list[dict[str, Any]]:
-    """All audit events for a specific workflow run (matched by correlation_id = run_id)."""
-    from agentforge.audit import AuditQuery
-    q = AuditQuery(correlation_id=run_id, limit=200)
-    events = audit_trail.query(q)
-    return [_fmt_event(e) for e in sorted(events, key=lambda e: e.timestamp)]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
