@@ -88,6 +88,30 @@ async def init_db() -> None:
                     decided_at  DOUBLE PRECISION
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_spans (
+                    span_id      TEXT PRIMARY KEY,
+                    agent_id     TEXT NOT NULL,
+                    agent_name   TEXT NOT NULL,
+                    run_id       TEXT NOT NULL,
+                    workflow_id  TEXT NOT NULL,
+                    backend      TEXT NOT NULL,
+                    model        TEXT NOT NULL,
+                    started_at   DOUBLE PRECISION NOT NULL,
+                    latency_ms   DOUBLE PRECISION NOT NULL,
+                    tokens_in    INTEGER NOT NULL DEFAULT 0,
+                    tokens_out   INTEGER NOT NULL DEFAULT 0,
+                    success      BOOLEAN NOT NULL DEFAULT TRUE,
+                    error        TEXT,
+                    cost_usd     DOUBLE PRECISION NOT NULL DEFAULT 0
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spans_run_id ON agent_spans (run_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spans_agent_id ON agent_spans (agent_id)"
+            )
     else:
         def _create() -> None:
             with _sqlite_conn() as c:
@@ -108,6 +132,24 @@ async def init_db() -> None:
                         created_at  REAL NOT NULL,
                         decided_at  REAL
                     );
+                    CREATE TABLE IF NOT EXISTS agent_spans (
+                        span_id      TEXT PRIMARY KEY,
+                        agent_id     TEXT NOT NULL,
+                        agent_name   TEXT NOT NULL,
+                        run_id       TEXT NOT NULL,
+                        workflow_id  TEXT NOT NULL,
+                        backend      TEXT NOT NULL,
+                        model        TEXT NOT NULL,
+                        started_at   REAL NOT NULL,
+                        latency_ms   REAL NOT NULL,
+                        tokens_in    INTEGER NOT NULL DEFAULT 0,
+                        tokens_out   INTEGER NOT NULL DEFAULT 0,
+                        success      INTEGER NOT NULL DEFAULT 1,
+                        error        TEXT,
+                        cost_usd     REAL NOT NULL DEFAULT 0
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_spans_run_id   ON agent_spans (run_id);
+                    CREATE INDEX IF NOT EXISTS idx_spans_agent_id ON agent_spans (agent_id);
                 """)
         await asyncio.to_thread(_create)
 
@@ -289,3 +331,153 @@ async def wait_for_decision(
         "reviewer_id": "system",
         "reason": f"Auto-rejected: no decision within {int(timeout_seconds)}s",
     }
+
+
+# ── Agent spans ───────────────────────────────────────────────────────────────
+
+async def write_span(span: dict[str, Any]) -> None:
+    """
+    Persist one OTEL span record to the database.
+
+    ``span`` must contain the fields emitted by SpanRecord.to_dict().
+    Fire-and-forget: errors are logged but never re-raised so the runner
+    is never blocked by a DB write failure.
+    """
+    try:
+        if _PG:
+            p = await _pool()
+            await p.execute(
+                """INSERT INTO agent_spans
+                   (span_id, agent_id, agent_name, run_id, workflow_id,
+                    backend, model, started_at, latency_ms,
+                    tokens_in, tokens_out, success, error, cost_usd)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                   ON CONFLICT (span_id) DO NOTHING""",
+                span["span_id"], span["agent_id"], span["agent_name"],
+                span["run_id"], span["workflow_id"],
+                span["backend"], span["model"], span["started_at"],
+                span["latency_ms"], span["tokens_in"], span["tokens_out"],
+                span["success"], span.get("error"), span["cost_usd"],
+            )
+        else:
+            def _fn() -> None:
+                with _sqlite_conn() as c:
+                    c.execute(
+                        """INSERT OR IGNORE INTO agent_spans
+                           (span_id, agent_id, agent_name, run_id, workflow_id,
+                            backend, model, started_at, latency_ms,
+                            tokens_in, tokens_out, success, error, cost_usd)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            span["span_id"], span["agent_id"], span["agent_name"],
+                            span["run_id"], span["workflow_id"],
+                            span["backend"], span["model"], span["started_at"],
+                            span["latency_ms"], span["tokens_in"], span["tokens_out"],
+                            1 if span["success"] else 0,
+                            span.get("error"), span["cost_usd"],
+                        ),
+                    )
+            await asyncio.to_thread(_fn)
+    except Exception as exc:
+        # Never let a DB write block the agent runner
+        import logging
+        logging.getLogger(__name__).warning("write_span failed (non-fatal): %s", exc)
+
+
+async def get_spans_for_run(run_id: str) -> list[dict[str, Any]]:
+    """Return all persisted spans for a run, oldest first."""
+    if _PG:
+        p = await _pool()
+        rows = await p.fetch(
+            "SELECT * FROM agent_spans WHERE run_id=$1 ORDER BY started_at ASC",
+            run_id,
+        )
+        return [dict(r) for r in rows]
+    else:
+        def _fn() -> list[dict[str, Any]]:
+            with _sqlite_conn() as c:
+                rows = c.execute(
+                    "SELECT * FROM agent_spans WHERE run_id=? ORDER BY started_at ASC",
+                    (run_id,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        return await asyncio.to_thread(_fn)
+
+
+async def get_agent_metrics_from_db() -> list[dict[str, Any]]:
+    """
+    Aggregate per-agent metrics from the persisted span table.
+
+    Returns one row per agent_id with: invocations, successes, failures,
+    avg_latency_ms, total_tokens_in, total_tokens_out, total_cost_usd,
+    error_rate.
+    """
+    if _PG:
+        p = await _pool()
+        rows = await p.fetch("""
+            SELECT
+                agent_id, agent_name, backend, model,
+                COUNT(*)                          AS invocations,
+                SUM(CASE WHEN success THEN 1 ELSE 0 END) AS successes,
+                SUM(CASE WHEN success THEN 0 ELSE 1 END) AS failures,
+                ROUND(AVG(latency_ms)::numeric, 1)        AS avg_latency_ms,
+                SUM(tokens_in)                    AS total_tokens_in,
+                SUM(tokens_out)                   AS total_tokens_out,
+                SUM(cost_usd)                     AS total_cost_usd
+            FROM agent_spans
+            GROUP BY agent_id, agent_name, backend, model
+            ORDER BY invocations DESC
+        """)
+        result = []
+        for r in rows:
+            d = dict(r)
+            inv = d["invocations"] or 1
+            d["error_rate"] = round((d["failures"] or 0) / inv, 4)
+            d["total_cost_usd"] = round(float(d["total_cost_usd"] or 0), 6)
+            result.append(d)
+        return result
+    else:
+        def _fn() -> list[dict[str, Any]]:
+            with _sqlite_conn() as c:
+                rows = c.execute("""
+                    SELECT
+                        agent_id, agent_name, backend, model,
+                        COUNT(*)                                  AS invocations,
+                        SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) AS successes,
+                        SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) AS failures,
+                        ROUND(AVG(latency_ms), 1)                  AS avg_latency_ms,
+                        SUM(tokens_in)                             AS total_tokens_in,
+                        SUM(tokens_out)                            AS total_tokens_out,
+                        SUM(cost_usd)                              AS total_cost_usd
+                    FROM agent_spans
+                    GROUP BY agent_id, agent_name, backend, model
+                    ORDER BY invocations DESC
+                """).fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                inv = d["invocations"] or 1
+                d["error_rate"] = round((d["failures"] or 0) / inv, 4)
+                d["total_cost_usd"] = round(float(d["total_cost_usd"] or 0), 6)
+                result.append(d)
+            return result
+        return await asyncio.to_thread(_fn)
+
+
+async def get_recent_spans_from_db(limit: int = 50) -> list[dict[str, Any]]:
+    """Return the most recent N spans across all runs."""
+    if _PG:
+        p = await _pool()
+        rows = await p.fetch(
+            "SELECT * FROM agent_spans ORDER BY started_at DESC LIMIT $1", limit
+        )
+        return [dict(r) for r in rows]
+    else:
+        def _fn() -> list[dict[str, Any]]:
+            with _sqlite_conn() as c:
+                rows = c.execute(
+                    "SELECT * FROM agent_spans ORDER BY started_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        return await asyncio.to_thread(_fn)

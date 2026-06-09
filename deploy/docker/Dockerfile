@@ -27,7 +27,14 @@ RUN pip install --no-cache-dir --upgrade pip && \
         prometheus-fastapi-instrumentator \
         httpx \
         authlib \
-        alembic
+        alembic \
+        "langgraph>=0.2" \
+        "langchain-anthropic>=0.2" \
+        "langchain-core>=0.2" \
+        "opentelemetry-api>=1.24" \
+        "opentelemetry-sdk>=1.24" \
+        "opentelemetry-exporter-otlp-proto-http>=1.24" \
+        "opentelemetry-semantic-conventions>=0.45b0"
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────

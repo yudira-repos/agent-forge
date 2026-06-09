@@ -32,13 +32,30 @@ dependencies = []
 anthropic = ["anthropic>=0.30"]
 openai = ["openai>=1.30"]
 langchain = ["langchain-core>=0.2", "langchain-openai>=0.1"]
+langgraph = [
+    "langgraph>=0.2",
+    "langchain-anthropic>=0.2",
+    "langchain-core>=0.2",
+]
 vertex = ["google-cloud-aiplatform>=1.60"]
+observability = [
+    "opentelemetry-api>=1.24",
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-http>=1.24",
+    "opentelemetry-semantic-conventions>=0.45b0",
+]
 all = [
     "anthropic>=0.30",
     "openai>=1.30",
+    "langgraph>=0.2",
+    "langchain-anthropic>=0.2",
     "langchain-core>=0.2",
     "langchain-openai>=0.1",
     "google-cloud-aiplatform>=1.60",
+    "opentelemetry-api>=1.24",
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-http>=1.24",
+    "opentelemetry-semantic-conventions>=0.45b0",
 ]
 dev = [
     "pytest>=8.0",

@@ -109,7 +109,135 @@ def _seed() -> None:
     _store[wf.workflow_id] = wf
 
 
+def _seed_multiagent() -> None:
+    """
+    Multi-agent demo workflow: Claude + OpenAI agents working together.
+
+    Flow
+    ----
+    Invoice received
+      → claude-invoice-extractor   (Anthropic — extracts fields)
+      → openai-risk-scorer         (OpenAI — scores payment risk)
+      → Condition: high risk or large amount?
+          yes → HITL Finance approval
+               → claude-payment-processor (Anthropic — generates payment)
+               → Payment confirmed
+          no  → claude-payment-processor (auto)
+               → Payment confirmed
+
+    Both agent nodes carry an ``Agent ID`` that maps to a registered
+    ``AgentManifest`` in the global registry.  The runner picks the
+    correct LLM vendor (Anthropic vs OpenAI) from the manifest's
+    ``runtime_adapter`` field — the workflow designer never hard-codes
+    API keys or model strings.
+    """
+    wf = WorkflowDefinition(
+        workflow_id="wf-multiagent-001",
+        name="AI Dual-Vendor Invoice Approval",
+        description=(
+            "Demonstrates Claude (Anthropic) and GPT (OpenAI) agents collaborating in a "
+            "single workflow with HITL, OTEL metrics, and live orchestration."
+        ),
+        version="1.0.0",
+        nodes=[
+            WFNode(
+                node_id="ma1", node_type="trigger", name="Invoice received",
+                x=15, y=165, detail="POST /webhook/invoice",
+                config={"Method": "POST", "Path": "/webhook/invoice",
+                        "Auth": "HMAC-SHA256"},
+            ),
+            WFNode(
+                node_id="ma2", node_type="agent",
+                name="Extract Invoice (Claude)",
+                x=195, y=165, detail="claude-invoice-extractor · Anthropic",
+                config={
+                    "Agent ID": "claude-invoice-extractor",
+                    # Model and system prompt come from the registered manifest —
+                    # these are informational labels for the designer only.
+                    "Model":    "claude-haiku-4-5-20251001 (from registry)",
+                    "Output":   "vendor_id, amount_usd, currency, invoice_number, due_date, items",
+                },
+            ),
+            WFNode(
+                node_id="ma3", node_type="agent",
+                name="Score Risk (OpenAI)",
+                x=395, y=165, detail="openai-risk-scorer · GPT-4o-mini",
+                config={
+                    "Agent ID": "openai-risk-scorer",
+                    "Model":    "gpt-4o-mini (from registry)",
+                    "Output":   "risk_score, risk_level, rationale",
+                },
+            ),
+            WFNode(
+                node_id="ma4", node_type="condition",
+                name="High risk or large amount?",
+                x=595, y=165,
+                detail="risk_score > 70 or amount_usd > 15000",
+                config={
+                    "Expression": "ctx.risk_score > 70 or ctx.amount_usd > 15000",
+                    "Yes branch": "Finance Approval",
+                    "No branch":  "Auto-Process",
+                },
+            ),
+            WFNode(
+                node_id="ma5", node_type="hitl",
+                name="Finance approval",
+                x=780, y=70, detail="finance-leads · 15 min",
+                config={
+                    "Reviewer group": "finance-leads",
+                    "Timeout": "900s",
+                    "Notify": "Slack #approvals",
+                },
+            ),
+            WFNode(
+                node_id="ma6", node_type="agent",
+                name="Process Payment (Claude)",
+                x=970, y=70, detail="claude-payment-processor · Anthropic",
+                config={
+                    "Agent ID": "claude-payment-processor",
+                    "Model":    "claude-haiku-4-5-20251001 (from registry)",
+                    "Output":   "payment_id, transaction_id, status, processed_at",
+                    "Scopes":   "payments:write",
+                },
+            ),
+            WFNode(
+                node_id="ma7", node_type="agent",
+                name="Auto-Process Payment (Claude)",
+                x=780, y=280, detail="claude-payment-processor · auto",
+                config={
+                    "Agent ID": "claude-payment-processor",
+                    "Model":    "claude-haiku-4-5-20251001 (from registry)",
+                    "Output":   "payment_id, transaction_id, status, processed_at",
+                    "Mode":     "auto",
+                },
+            ),
+            WFNode(
+                node_id="ma8", node_type="event",
+                name="Payment confirmed",
+                x=1160, y=165, detail="payments.confirmed · Kafka",
+                config={
+                    "Topic":  "payments.confirmed",
+                    "Schema": "PaymentEvent v1",
+                    "Broker": "kafka.internal:9092",
+                },
+            ),
+        ],
+        edges=[
+            WFEdge(edge_id="me1", from_node="ma1", to_node="ma2"),
+            WFEdge(edge_id="me2", from_node="ma2", to_node="ma3"),
+            WFEdge(edge_id="me3", from_node="ma3", to_node="ma4"),
+            WFEdge(edge_id="me4", from_node="ma4", to_node="ma5", port="yes", label="yes"),
+            WFEdge(edge_id="me5", from_node="ma4", to_node="ma7", port="no",  label="no"),
+            WFEdge(edge_id="me6", from_node="ma5", to_node="ma6"),
+            WFEdge(edge_id="me7", from_node="ma6", to_node="ma8"),
+            WFEdge(edge_id="me8", from_node="ma7", to_node="ma8"),
+        ],
+    )
+    _store[wf.workflow_id] = wf
+
+
 _seed()
+_seed_multiagent()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

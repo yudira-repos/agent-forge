@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Orchestration — AgentForge</title>
+<style>
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --bg:       #0d1117;
+  --surface:  #161b22;
+  --surface2: #21262d;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --muted:    #7d8590;
+  --accent:   #58a6ff;
+  --green:    #3fb950;
+  --yellow:   #d29922;
+  --red:      #f85149;
+  --purple:   #bc8cff;
+  --orange:   #ffa657;
+  --claude:   #c084fc;   /* purple for Anthropic/Claude */
+  --openai:   #10b981;   /* teal for OpenAI */
+  --mock:     #6b7280;   /* gray for mock */
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; min-height: 100vh; }
+
+/* ── Nav ──────────────────────────────────────────────────────────────────── */
+nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; gap: 20px; height: 48px; }
+nav .brand { font-weight: 700; font-size: 15px; color: var(--text); text-decoration: none; }
+nav .brand span { color: var(--accent); }
+nav a { color: var(--muted); text-decoration: none; font-size: 13px; padding: 4px 8px; border-radius: 4px; }
+nav a:hover, nav a.active { color: var(--text); background: var(--surface2); }
+.nav-status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+/* ── Page layout ──────────────────────────────────────────────────────────── */
+.page { max-width: 1400px; margin: 0 auto; padding: 24px; }
+.page-header { margin-bottom: 20px; }
+.page-header h1 { font-size: 20px; font-weight: 600; }
+.page-header p  { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+/* ── Cards ────────────────────────────────────────────────────────────────── */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.card-title .icon { font-size: 14px; }
+
+/* ── Stat boxes ───────────────────────────────────────────────────────────── */
+.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.stat-value { font-size: 26px; font-weight: 700; margin-top: 4px; }
+.stat-value.green  { color: var(--green);  }
+.stat-value.blue   { color: var(--accent); }
+.stat-value.yellow { color: var(--yellow); }
+.stat-value.purple { color: var(--purple); }
+.stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── Agent metrics table ──────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,.02); }
+
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+.badge-anthropic { background: rgba(192,132,252,.15); color: var(--claude);  }
+.badge-openai    { background: rgba(16,185,129,.15);  color: var(--openai);  }
+.badge-mock      { background: rgba(107,114,128,.15); color: var(--mock);    }
+.badge-success   { background: rgba(63,185,80,.15);   color: var(--green);   }
+.badge-error     { background: rgba(248,81,73,.15);   color: var(--red);     }
+.badge-running   { background: rgba(88,166,255,.15);  color: var(--accent);  }
+.badge-hitl      { background: rgba(210,153,34,.15);  color: var(--yellow);  }
+.badge-completed { background: rgba(63,185,80,.12);   color: var(--green);   }
+.badge-failed    { background: rgba(248,81,73,.12);   color: var(--red);     }
+
+/* ── Timeline ─────────────────────────────────────────────────────────────── */
+#timeline { max-height: 420px; overflow-y: auto; }
+.run-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+.run-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; }
+.run-header:hover { background: rgba(255,255,255,.03); }
+.run-id-tag { font-family: monospace; font-size: 11px; color: var(--muted); }
+.run-name { font-weight: 600; font-size: 13px; flex: 1; }
+.run-meta { font-size: 12px; color: var(--muted); }
+.run-spans { padding: 0 14px 12px; display: none; }
+.run-card.expanded .run-spans { display: block; }
+.span-list { list-style: none; }
+.span-item { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.span-item:last-child { border-bottom: none; }
+.span-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.span-agent { flex: 1; font-weight: 500; }
+.span-meta { color: var(--muted); font-size: 11px; }
+.span-latency { font-family: monospace; font-size: 11px; width: 60px; text-align: right; }
+
+/* ── OTEL trace viewer ────────────────────────────────────────────────────── */
+#trace-viewer { display: none; }
+#trace-viewer.visible { display: block; }
+.trace-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.trace-label { width: 220px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace-bar-wrap { flex: 1; background: var(--surface2); border-radius: 2px; height: 14px; overflow: hidden; }
+.trace-bar { height: 100%; border-radius: 2px; transition: width .4s; }
+.trace-tokens { font-size: 11px; color: var(--muted); font-family: monospace; width: 80px; text-align: right; }
+
+/* ── Misc ─────────────────────────────────────────────────────────────────── */
+.empty { color: var(--muted); font-size: 13px; padding: 20px; text-align: center; }
+.section-gap { margin-top: 16px; }
+input[type="text"] { background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); padding: 6px 10px; font-size: 12px; width: 240px; }
+input[type="text"]:focus { outline: none; border-color: var(--accent); }
+button.btn { background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); padding: 6px 12px; font-size: 12px; cursor: pointer; }
+button.btn:hover { border-color: var(--accent); color: var(--accent); }
+button.btn-primary { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+button.btn-primary:hover { background: #79b8ff; }
+.flex-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="/">Agent<span>Forge</span></a>
+  <a href="/">Dashboard</a>
+  <a href="/workflow">Workflow Designer</a>
+  <a href="/orchestration" class="active">Live Orchestration</a>
+  <div class="nav-status">
+    <span class="dot" id="sse-dot" style="background:var(--muted)"></span>
+    <span id="sse-status">Connecting…</span>
+    <span id="last-update" style="margin-left:8px"></span>
+  </div>
+</nav>
+
+<div class="page">
+  <div class="page-header">
+    <h1>⚡ Live Orchestration Dashboard</h1>
+    <p>Real-time execution timeline · Per-agent OTEL metrics · Cost tracking · Token usage</p>
+  </div>
+
+  <!-- ── Top stats ── -->
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-label">Total Agent Calls</div>
+      <div class="stat-value blue" id="stat-invocations">—</div>
+      <div class="stat-sub">across all runs</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Avg Latency</div>
+      <div class="stat-value green" id="stat-latency">—</div>
+      <div class="stat-sub">ms per agent call</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Total Tokens</div>
+      <div class="stat-value yellow" id="stat-tokens">—</div>
+      <div class="stat-sub">in + out this session</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Est. Cost</div>
+      <div class="stat-value purple" id="stat-cost">—</div>
+      <div class="stat-sub">USD this session</div>
+    </div>
+  </div>
+
+  <!-- ── Two column: timeline + agent metrics ── -->
+  <div class="grid-2">
+
+    <!-- Live execution timeline -->
+    <div class="card">
+      <div class="card-title"><span class="icon">🔴</span> Live Execution Timeline</div>
+      <div id="timeline"><div class="empty">No runs yet. Execute a workflow to see live data.</div></div>
+    </div>
+
+    <!-- Per-agent metrics -->
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Per-Agent Metrics</div>
+      <div style="overflow-x:auto">
+        <table id="metrics-table">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Backend</th>
+              <th>Calls</th>
+              <th>Avg ms</th>
+              <th>Tokens↑</th>
+              <th>Tokens↓</th>
+              <th>Cost $</th>
+              <th>Err%</th>
+            </tr>
+          </thead>
+          <tbody id="metrics-body">
+            <tr><td colspan="8" class="empty">Waiting for agent calls…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── OTEL Trace Viewer ── -->
+  <div class="card section-gap">
+    <div class="card-title"><span class="icon">🔍</span> OTEL Trace Viewer</div>
+    <div class="flex-row" style="margin-bottom:12px">
+      <input type="text" id="trace-run-id" placeholder="Enter run_id (e.g. run-abc123ef)">
+      <button class="btn btn-primary" onclick="loadTrace()">Load Trace</button>
+      <span id="trace-status" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <div id="trace-viewer">
+      <div id="trace-bars"></div>
+      <div class="flex-row" style="margin-top:12px;font-size:12px;color:var(--muted)">
+        <span id="trace-summary"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Register agent form ── -->
+  <div class="card section-gap">
+    <div class="card-title"><span class="icon">🤖</span> Register Agent</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      Register a Claude or OpenAI agent into the global registry. Once registered, reference its
+      <strong>Agent ID</strong> in any workflow node — the runner picks the right LLM automatically.
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+      <label style="font-size:12px">
+        Agent ID<br>
+        <input type="text" id="reg-id" placeholder="my-agent-001" style="width:100%;margin-top:4px">
+      </label>
+      <label style="font-size:12px">
+        Name<br>
+        <input type="text" id="reg-name" placeholder="My Custom Agent" style="width:100%;margin-top:4px">
+      </label>
+      <label style="font-size:12px">
+        Owner<br>
+        <input type="text" id="reg-owner" placeholder="my-team" style="width:100%;margin-top:4px">
+      </label>
+      <label style="font-size:12px">
+        Runtime Adapter<br>
+        <select id="reg-adapter" style="width:100%;margin-top:4px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:5px;font-size:12px">
+          <option value="anthropic">anthropic (Claude)</option>
+          <option value="openai">openai (GPT)</option>
+        </select>
+      </label>
+      <label style="font-size:12px">
+        Model<br>
+        <input type="text" id="reg-model" placeholder="claude-haiku-4-5-20251001" style="width:100%;margin-top:4px">
+      </label>
+      <label style="font-size:12px">
+        Output Fields<br>
+        <input type="text" id="reg-output" placeholder="field_a, field_b, field_c" style="width:100%;margin-top:4px">
+      </label>
+    </div>
+    <label style="font-size:12px;display:block;margin-bottom:12px">
+      System Prompt<br>
+      <textarea id="reg-prompt" rows="3" style="width:100%;margin-top:4px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:5px;font-size:12px;resize:vertical" placeholder="You are a ... agent. Return ONLY a valid JSON object with fields: ..."></textarea>
+    </label>
+    <div class="flex-row">
+      <button class="btn btn-primary" onclick="registerAgent()">Register Agent</button>
+      <span id="reg-status" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+  </div>
+
+  <!-- ── OTEL infrastructure status ── -->
+  <div class="card section-gap">
+    <div class="card-title"><span class="icon">📡</span> OTEL Infrastructure</div>
+    <div id="otel-status" style="font-size:13px;color:var(--muted)">Loading…</div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+// ── SSE connection ──────────────────────────────────────────────────────────
+let es;
+let lastData = {};
+
+function connect() {
+  es = new EventSource('/api/orchestration/live');
+  es.onopen = () => {
+    document.getElementById('sse-dot').style.background = 'var(--green)';
+    document.getElementById('sse-status').textContent = 'Live';
+  };
+  es.onerror = () => {
+    document.getElementById('sse-dot').style.background = 'var(--red)';
+    document.getElementById('sse-status').textContent = 'Reconnecting…';
+    setTimeout(connect, 5000);
+  };
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    lastData = d;
+    const ts = new Date(d.ts * 1000).toLocaleTimeString();
+    document.getElementById('last-update').textContent = `Updated ${ts}`;
+    renderDashboard(d);
+  };
+}
+
+// ── Render everything ───────────────────────────────────────────────────────
+function renderDashboard(d) {
+  renderStats(d.agent_metrics);
+  renderTimeline(d.active_runs);
+  renderMetricsTable(d.agent_metrics);
+  renderOtelStatus();
+}
+
+function renderStats(metrics) {
+  const total = metrics.reduce((s, m) => s + m.invocations, 0);
+  const totalTokens = metrics.reduce((s, m) => s + m.total_tokens_in + m.total_tokens_out, 0);
+  const totalCost = metrics.reduce((s, m) => s + m.total_cost_usd, 0);
+  const avgLat = total
+    ? Math.round(metrics.reduce((s, m) => s + m.avg_latency_ms * m.invocations, 0) / total)
+    : 0;
+
+  document.getElementById('stat-invocations').textContent = total;
+  document.getElementById('stat-latency').textContent = avgLat ? `${avgLat}ms` : '—';
+  document.getElementById('stat-tokens').textContent = totalTokens > 1000
+    ? `${(totalTokens/1000).toFixed(1)}k` : totalTokens;
+  document.getElementById('stat-cost').textContent = totalCost
+    ? `$${totalCost.toFixed(4)}` : '$0.0000';
+}
+
+function renderTimeline(runs) {
+  const el = document.getElementById('timeline');
+  if (!runs.length) {
+    el.innerHTML = '<div class="empty">No runs yet. Execute a workflow from the <a href="/workflow" style="color:var(--accent)">Workflow Designer</a>.</div>';
+    return;
+  }
+  el.innerHTML = runs.map(run => {
+    const age = Math.round(Date.now()/1000 - run.started_at);
+    const statusBadge = `<span class="badge badge-${run.status}">${run.status}</span>`;
+    const engineBadge = run.engine === 'langgraph'
+      ? '<span class="badge" style="background:rgba(88,166,255,.15);color:var(--accent)">LangGraph</span>'
+      : '<span class="badge" style="background:rgba(107,114,128,.15);color:var(--muted)">custom</span>';
+    const spans = run.recent_spans || [];
+    const spansHtml = spans.length
+      ? `<ul class="span-list">${spans.map(s => {
+          const color = s.backend === 'anthropic' ? 'var(--claude)'
+                      : s.backend === 'openai'    ? 'var(--openai)'
+                      :                             'var(--mock)';
+          const tok = s.tokens_in + s.tokens_out;
+          return `<li class="span-item">
+            <span class="span-dot" style="background:${color}"></span>
+            <span class="span-agent">${s.agent_name}</span>
+            <span class="badge badge-${s.backend}" style="font-size:10px">${s.backend}</span>
+            <span class="span-meta">${tok ? tok+'tok' : ''}</span>
+            <span class="span-latency" style="color:${s.latency_ms>1000?'var(--red)':s.latency_ms>500?'var(--yellow)':'var(--green)'}">
+              ${Math.round(s.latency_ms)}ms
+            </span>
+          </li>`;
+        }).join('')}</ul>`
+      : `<div style="font-size:12px;color:var(--muted);padding:4px 0">No agent spans yet for this run.</div>`;
+    return `<div class="run-card" id="run-${run.run_id}">
+      <div class="run-header" onclick="this.closest('.run-card').classList.toggle('expanded')">
+        ${statusBadge}
+        ${engineBadge}
+        <span class="run-name">${run.workflow_name}</span>
+        <span class="run-id-tag">${run.run_id.slice(0,12)}</span>
+        <span class="run-meta">${run.span_count} spans · ${run.total_tokens}tok · $${(run.total_cost_usd||0).toFixed(4)} · ${age}s ago</span>
+        <span style="color:var(--muted);font-size:16px">▾</span>
+      </div>
+      <div class="run-spans">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+          Agents used: ${(run.agents_used||[]).join(', ') || '—'}
+          &nbsp;·&nbsp;
+          <a href="javascript:void(0)" onclick="loadTraceById('${run.run_id}')" style="color:var(--accent)">View full trace →</a>
+        </div>
+        ${spansHtml}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderMetricsTable(metrics) {
+  const tbody = document.getElementById('metrics-body');
+  if (!metrics.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Waiting for agent calls…</td></tr>';
+    return;
+  }
+  tbody.innerHTML = metrics.map(m => {
+    const errPct = (m.error_rate * 100).toFixed(1);
+    const errColor = m.error_rate > .1 ? 'var(--red)' : m.error_rate > 0 ? 'var(--yellow)' : 'var(--green)';
+    return `<tr>
+      <td style="font-weight:500">${m.agent_name}<br><span style="font-size:11px;color:var(--muted)">${m.model}</span></td>
+      <td><span class="badge badge-${m.backend}">${m.backend}</span></td>
+      <td>${m.invocations}</td>
+      <td style="font-family:monospace">${m.avg_latency_ms}ms</td>
+      <td style="font-family:monospace;color:var(--muted)">${m.total_tokens_in}</td>
+      <td style="font-family:monospace;color:var(--muted)">${m.total_tokens_out}</td>
+      <td style="font-family:monospace;color:var(--yellow)">$${m.total_cost_usd.toFixed(4)}</td>
+      <td style="font-family:monospace;color:${errColor}">${errPct}%</td>
+    </tr>`;
+  }).join('');
+}
+
+async function renderOtelStatus() {
+  try {
+    const r = await fetch('/api/metrics/agents');
+    const d = await r.json();
+    const o = d.otel;
+    document.getElementById('otel-status').innerHTML = `
+      <div class="flex-row" style="gap:16px;flex-wrap:wrap">
+        <span>SDK: <strong style="color:${o.otel_sdk?'var(--green)':'var(--muted)'}">${o.otel_sdk?'Active':'Not installed'}</strong></span>
+        <span>OTLP endpoint: <strong style="color:${o.otlp_endpoint?'var(--green)':'var(--muted)'}">${o.otlp_endpoint||'(none — set OTEL_EXPORTER_OTLP_ENDPOINT)'}</strong></span>
+        <span>Spans in store: <strong style="color:var(--accent)">${o.spans_in_store}</strong></span>
+        <span>Agents tracked: <strong style="color:var(--accent)">${o.agents_tracked}</strong></span>
+      </div>`;
+  } catch(e) {}
+}
+
+// ── Trace viewer ────────────────────────────────────────────────────────────
+async function loadTrace() {
+  const runId = document.getElementById('trace-run-id').value.trim();
+  if (!runId) return;
+  await loadTraceById(runId);
+}
+
+async function loadTraceById(runId) {
+  document.getElementById('trace-run-id').value = runId;
+  document.getElementById('trace-status').textContent = 'Loading…';
+  try {
+    const r = await fetch(`/api/traces/${runId}`);
+    if (!r.ok) { document.getElementById('trace-status').textContent = 'Not found'; return; }
+    const d = await r.json();
+    document.getElementById('trace-status').textContent = `${d.span_count} spans · ${d.total_tokens} tokens · $${d.total_cost_usd.toFixed(4)} · ${d.total_latency_ms}ms total`;
+    renderTraceBars(d.spans);
+    document.getElementById('trace-viewer').classList.add('visible');
+  } catch(e) {
+    document.getElementById('trace-status').textContent = `Error: ${e.message}`;
+  }
+}
+
+function renderTraceBars(spans) {
+  const maxLatency = Math.max(...spans.map(s => s.latency_ms), 1);
+  const bars = document.getElementById('trace-bars');
+  bars.innerHTML = spans.map(s => {
+    const pct = Math.max(2, (s.latency_ms / maxLatency * 100)).toFixed(1);
+    const color = s.backend === 'anthropic' ? 'var(--claude)'
+                : s.backend === 'openai'    ? 'var(--openai)'
+                :                             'var(--mock)';
+    const tok = s.tokens_in + s.tokens_out;
+    return `<div class="trace-bar-row">
+      <div class="trace-label" title="${s.agent_id}">
+        <span class="badge badge-${s.backend}" style="margin-right:4px;font-size:10px">${s.backend}</span>
+        ${s.agent_name}
+      </div>
+      <div class="trace-bar-wrap">
+        <div class="trace-bar" style="width:${pct}%;background:${color};opacity:${s.success?1:.5}"></div>
+      </div>
+      <div class="trace-tokens">${Math.round(s.latency_ms)}ms · ${tok}tok</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Register agent ──────────────────────────────────────────────────────────
+async function registerAgent() {
+  const payload = {
+    agent_id: document.getElementById('reg-id').value.trim(),
+    name:     document.getElementById('reg-name').value.trim(),
+    version:  '1.0.0',
+    description: `Custom agent: ${document.getElementById('reg-name').value.trim()}`,
+    owner:    document.getElementById('reg-owner').value.trim() || 'my-team',
+    runtime_adapter: document.getElementById('reg-adapter').value,
+    config: {
+      model:         document.getElementById('reg-model').value.trim(),
+      system_prompt: document.getElementById('reg-prompt').value.trim(),
+      output_fields: document.getElementById('reg-output').value.trim(),
+    },
+  };
+  if (!payload.agent_id || !payload.name) {
+    document.getElementById('reg-status').textContent = '⚠ Agent ID and Name are required';
+    return;
+  }
+  const r = await fetch('/api/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (r.ok) {
+    document.getElementById('reg-status').textContent = `✓ Registered ${payload.agent_id}`;
+    document.getElementById('reg-status').style.color = 'var(--green)';
+    ['reg-id','reg-name','reg-owner','reg-model','reg-output','reg-prompt'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+  } else {
+    const err = await r.json();
+    document.getElementById('reg-status').textContent = `✗ ${err.detail || 'Error'}`;
+    document.getElementById('reg-status').style.color = 'var(--red)';
+  }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+// Pre-fill adapter model hint
+document.getElementById('reg-adapter').addEventListener('change', e => {
+  const m = document.getElementById('reg-model');
+  m.placeholder = e.target.value === 'anthropic'
+    ? 'claude-haiku-4-5-20251001'
+    : 'gpt-4o-mini';
+});
+
+connect();
+renderOtelStatus();
+
+// Also do one initial REST fetch so the page shows data immediately
+(async () => {
+  try {
+    const r = await fetch('/api/metrics/agents');
+    if (r.ok) {
+      const d = await r.json();
+      renderStats(d.agents);
+      renderMetricsTable(d.agents);
+    }
+  } catch(e) {}
+})();
+</script>
+</body>
+</html>

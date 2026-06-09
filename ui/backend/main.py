@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -78,7 +78,8 @@ app.include_router(workflows_router)
 # ── Health endpoints (liveness + readiness) ───────────────────────────────────
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "version": "0.1.0"}
+    from ui.backend.observability.otel import otel_status
+    return {"status": "ok", "version": "0.1.0", "otel": otel_status()}
 
 @app.get("/ready")
 def ready() -> dict:
@@ -251,6 +252,15 @@ def seed_demo_data() -> None:
 
 seed_demo_data()
 
+# Merge workflow-specific agents (Claude + OpenAI) into the main registry
+# so they appear in /api/agents and the dashboard.
+try:
+    from ui.backend.agent_registry import registry as _wf_registry
+    for _wf_m in _wf_registry.list_all():
+        registry.register(_wf_m)
+except Exception:
+    pass
+
 
 # ── Auth — demo user store ─────────────────────────────────────────────────────
 import hashlib, hmac as _hmac
@@ -394,7 +404,13 @@ class RegisterAgentPayload(BaseModel):
     description: str
     owner: str
     tags: list[str] = []
-    runtime_adapter: str = "anthropic"
+    runtime_adapter: str = "anthropic"   # "anthropic" | "openai" | "vertex"
+    # Agent-specific config stored in manifest.metadata
+    # For Anthropic: model, system_prompt, output_fields, max_tokens
+    # For OpenAI:    model, system_prompt, output_fields, max_tokens
+    config: dict[str, Any] = {}
+    # Optional capability declarations
+    capabilities: list[dict[str, Any]] = []
 
 
 # ── Routes: Dashboard ──────────────────────────────────────────────────────────
@@ -447,6 +463,34 @@ def get_agent(agent_id: str) -> dict[str, Any]:
 
 @app.post("/api/agents")
 async def register_agent(payload: RegisterAgentPayload) -> dict[str, Any]:
+    """
+    Register a new agent manifest.
+
+    For Anthropic agents supply ``config`` with::
+
+        {"model": "claude-haiku-4-5-20251001", "system_prompt": "...",
+         "output_fields": "field_a, field_b", "max_tokens": 1024,
+         "cost_per_1k_input": 0.00025, "cost_per_1k_output": 0.00125}
+
+    For OpenAI agents::
+
+        {"model": "gpt-4o-mini", "system_prompt": "...",
+         "output_fields": "field_a, field_b",
+         "cost_per_1k_input": 0.00015, "cost_per_1k_output": 0.00060}
+
+    The runner looks up the manifest by ``Agent ID`` from the workflow node
+    config and uses these values automatically — no API-key sniffing needed.
+    """
+    caps = [
+        AgentCapability(
+            name=c.get("name", "unnamed"),
+            description=c.get("description", ""),
+            tags=c.get("tags", []),
+            requires_hitl=bool(c.get("requires_hitl", False)),
+            idempotent=bool(c.get("idempotent", True)),
+        )
+        for c in payload.capabilities
+    ]
     manifest = AgentManifest(
         agent_id=payload.agent_id,
         name=payload.name,
@@ -455,11 +499,21 @@ async def register_agent(payload: RegisterAgentPayload) -> dict[str, Any]:
         owner=payload.owner,
         tags=payload.tags,
         runtime_adapter=payload.runtime_adapter,
+        capabilities=caps,
+        metadata=dict(payload.config),
     )
+    # Register in both the main UI registry and the workflow runner registry
     registry.register(manifest)
+    try:
+        from ui.backend.agent_registry import registry as _wf_registry
+        _wf_registry.register(manifest)
+    except Exception:
+        pass
     audit_logger.log(EventType.AGENT_REGISTERED, payload.agent_id, str(uuid.uuid4()),
-                     payload={"name": payload.name, "version": payload.version})
-    await broadcast({"type": "agent_registered", "agent_id": payload.agent_id, "name": payload.name})
+                     payload={"name": payload.name, "version": payload.version,
+                              "runtime_adapter": payload.runtime_adapter})
+    await broadcast({"type": "agent_registered", "agent_id": payload.agent_id, "name": payload.name,
+                     "runtime_adapter": payload.runtime_adapter})
     return manifest.to_dict()
 
 
@@ -469,6 +523,171 @@ async def deprecate_agent(agent_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Agent not found")
     await broadcast({"type": "agent_deprecated", "agent_id": agent_id})
     return {"status": "deprecated"}
+
+
+@app.get("/api/agents/{agent_id}/metrics")
+def get_agent_metrics_by_id(agent_id: str) -> dict[str, Any]:
+    """
+    Return OTEL-derived execution metrics for a specific agent.
+
+    Includes: invocation count, avg latency, token usage, estimated cost,
+    error rate, and the 20 most recent spans.
+    """
+    from ui.backend.observability.otel import get_agent_metrics, get_run_spans
+    manifest = registry.get(agent_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    all_metrics = get_agent_metrics()
+    agent_met = next((m for m in all_metrics if m["agent_id"] == agent_id), {
+        "agent_id": agent_id, "agent_name": manifest.name,
+        "backend": manifest.runtime_adapter, "model": manifest.metadata.get("model", ""),
+        "invocations": 0, "successes": 0, "failures": 0,
+        "avg_latency_ms": 0, "total_tokens_in": 0, "total_tokens_out": 0,
+        "total_cost_usd": 0, "error_rate": 0,
+    })
+    return {
+        **agent_met,
+        "manifest": manifest.to_dict(),
+    }
+
+
+# ── Routes: OTEL Metrics ───────────────────────────────────────────────────────
+
+@app.get("/api/metrics/agents")
+async def get_all_agent_metrics() -> dict[str, Any]:
+    """
+    Aggregated execution metrics for every agent that has run.
+
+    Merges in-memory (current session, real-time) with DB (historical,
+    survives restarts).  DB rows take precedence for counts — in-memory
+    only adds agents not yet flushed.
+    """
+    from ui.backend.observability.otel import get_agent_metrics, otel_status
+    from ui.backend.db import sqlite_store
+
+    # DB aggregates (persistent — full history)
+    try:
+        db_metrics = await sqlite_store.get_agent_metrics_from_db()
+    except Exception:
+        db_metrics = []
+
+    # In-memory aggregates (current session only — real-time)
+    mem_metrics = get_agent_metrics()
+
+    # Merge: DB is authoritative; in-memory fills gaps for newly started agents
+    db_ids = {m["agent_id"] for m in db_metrics}
+    merged = db_metrics + [m for m in mem_metrics if m["agent_id"] not in db_ids]
+
+    return {
+        "agents": merged,
+        "otel": otel_status(),
+    }
+
+
+@app.get("/api/metrics/recent")
+async def get_recent_spans() -> list[dict[str, Any]]:
+    """Return the 50 most recent agent spans across all runs (DB-backed)."""
+    from ui.backend.db import sqlite_store
+    try:
+        return await sqlite_store.get_recent_spans_from_db(limit=50)
+    except Exception:
+        from ui.backend.observability.otel import get_recent_spans as _mem
+        return _mem(limit=50)
+
+
+@app.get("/api/traces/{run_id}")
+async def get_run_trace(run_id: str) -> dict[str, Any]:
+    """
+    Return the full OTEL trace for a workflow run.
+
+    Reads from the DB (persistent) and falls back to in-memory for the
+    current session if the DB has no rows yet.
+    """
+    from ui.backend.db import sqlite_store
+    from ui.backend.observability.otel import get_run_spans as _mem_spans
+
+    try:
+        db_spans = await sqlite_store.get_spans_for_run(run_id)
+    except Exception:
+        db_spans = []
+
+    # Fall back to in-memory if DB has nothing (e.g. span not yet flushed)
+    spans = db_spans if db_spans else _mem_spans(run_id)
+
+    run = _workflow_runs.get(run_id)
+    return {
+        "run_id":        run_id,
+        "workflow_id":   run.workflow_id   if run else "unknown",
+        "workflow_name": run.workflow_name if run else "unknown",
+        "status":        run.status        if run else "unknown",
+        "spans":         spans,
+        "span_count":    len(spans),
+        "total_tokens":  sum((s.get("tokens_in", 0) + s.get("tokens_out", 0)) for s in spans),
+        "total_cost_usd": round(sum(s.get("cost_usd", 0) for s in spans), 6),
+        "total_latency_ms": round(sum(s.get("latency_ms", 0) for s in spans), 1),
+    }
+
+
+# ── Routes: Live Orchestration (SSE) ──────────────────────────────────────────
+
+@app.get("/api/orchestration/live")
+async def orchestration_live_sse() -> StreamingResponse:
+    """
+    Server-Sent Events stream of live orchestration state.
+
+    The client receives one JSON event every 2 seconds containing:
+      - Active workflow runs (started in the last 60 seconds)
+      - Per-agent execution data for each run
+      - Current aggregated metrics
+
+    Connect from JS:
+        const es = new EventSource('/api/orchestration/live');
+        es.onmessage = e => console.log(JSON.parse(e.data));
+    """
+    import asyncio
+
+    async def event_generator():
+        while True:
+            from ui.backend.observability.otel import get_live_runs, get_agent_metrics
+            active_runs = []
+            for run in sorted(
+                _workflow_runs.values(),
+                key=lambda r: r.started_at,
+                reverse=True,
+            )[:10]:
+                from ui.backend.observability.otel import get_run_spans
+                spans = get_run_spans(run.run_id)
+                active_runs.append({
+                    "run_id":       run.run_id,
+                    "workflow_id":  run.workflow_id,
+                    "workflow_name": run.workflow_name,
+                    "status":       run.status,
+                    "engine":       run.engine,
+                    "started_at":   run.started_at,
+                    "current_node": run.current_node_id,
+                    "step_count":   len(run.steps),
+                    "span_count":   len(spans),
+                    "total_tokens": sum(s["tokens_in"] + s["tokens_out"] for s in spans),
+                    "total_cost_usd": round(sum(s["cost_usd"] for s in spans), 6),
+                    "agents_used":  list({s["agent_id"] for s in spans}),
+                    "recent_spans": spans[-5:],  # last 5 spans for live timeline
+                })
+            payload = json.dumps({
+                "ts":          time.time(),
+                "active_runs": active_runs,
+                "agent_metrics": get_agent_metrics(),
+            })
+            yield f"data: {payload}\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── Routes: HITL ───────────────────────────────────────────────────────────────
@@ -504,25 +723,33 @@ def _hitl_audit_ctx(request_id: str) -> tuple[str, str, str]:
 
 
 @app.post("/api/hitl/{request_id}/approve")
-async def approve_hitl(request_id: str, payload: ApprovePayload) -> dict[str, Any]:
-    # req may be None after a server restart (in-memory _pending is cleared).
-    # We always proceed with DB resolution — the polling loop picks it up within 1s.
+async def approve_hitl(
+    request_id: str, payload: ApprovePayload, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
+    # req may be None after a server restart — proceed regardless.
     req = hitl_orchestrator.get_request(request_id)
     reason = payload.reason or "Approved via AgentForge UI"
+    decision_dict = {"approved": True, "reviewer_id": payload.reviewer_id, "reason": reason}
 
-    # Write to DB FIRST — the workflow polling loop will see this within 1s
+    # Always write to DB (custom engine polls this; also used for audit recovery)
     await sqlite_store.resolve_hitl(request_id, True, payload.reviewer_id, reason)
 
-    # Update in-memory orchestrator state (no-op if req is None)
-    decision = ApprovalDecision(
+    # Update in-memory orchestrator (removes from HITL panel)
+    orc_decision = ApprovalDecision(
         request_id=request_id, reviewer_id=payload.reviewer_id,
         approved=True, reason=reason,
     )
     if req:
-        await hitl_orchestrator.decide(decision)
+        await hitl_orchestrator.decide(orc_decision)
         agent_id, correlation_id, action = req.agent_id, req.correlation_id, req.action
     else:
         agent_id, correlation_id, action = _hitl_audit_ctx(request_id)
+
+    # LangGraph path: resume the paused StateGraph in a background task
+    run = _get_run_by_hitl_request(request_id)
+    if run and run.engine == "langgraph":
+        hitl_orchestrator._pending.pop(request_id, None)
+        background_tasks.add_task(_resume_lg_run, run, decision_dict)
 
     audit_logger.log(EventType.HITL_APPROVED, agent_id, correlation_id,
                      payload={"reviewer": payload.reviewer_id, "reason": reason},
@@ -535,22 +762,29 @@ async def approve_hitl(request_id: str, payload: ApprovePayload) -> dict[str, An
 
 
 @app.post("/api/hitl/{request_id}/reject")
-async def reject_hitl(request_id: str, payload: RejectPayload) -> dict[str, Any]:
-    # req may be None after a server restart — proceed with DB resolution regardless.
+async def reject_hitl(
+    request_id: str, payload: RejectPayload, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
     req = hitl_orchestrator.get_request(request_id)
+    decision_dict = {"approved": False, "reviewer_id": payload.reviewer_id, "reason": payload.reason}
 
-    # Write to DB FIRST — the workflow polling loop will see this within 1s
     await sqlite_store.resolve_hitl(request_id, False, payload.reviewer_id, payload.reason)
 
-    decision = ApprovalDecision(
+    orc_decision = ApprovalDecision(
         request_id=request_id, reviewer_id=payload.reviewer_id,
         approved=False, reason=payload.reason,
     )
     if req:
-        await hitl_orchestrator.decide(decision)
+        await hitl_orchestrator.decide(orc_decision)
         agent_id, correlation_id, action = req.agent_id, req.correlation_id, req.action
     else:
         agent_id, correlation_id, action = _hitl_audit_ctx(request_id)
+
+    # LangGraph path: resume with rejection decision
+    run = _get_run_by_hitl_request(request_id)
+    if run and run.engine == "langgraph":
+        hitl_orchestrator._pending.pop(request_id, None)
+        background_tasks.add_task(_resume_lg_run, run, decision_dict)
 
     audit_logger.log(EventType.HITL_REJECTED, agent_id, correlation_id,
                      payload={"reviewer": payload.reviewer_id, "reason": payload.reason},
@@ -632,6 +866,15 @@ def serve_workflow() -> FileResponse:
     return HTMLResponse("<h1>Workflow Designer</h1><p>workflow.html not found in ui/static/</p>")
 
 
+@app.get("/orchestration")
+def serve_orchestration() -> FileResponse:
+    """Live orchestration dashboard — agent metrics + real-time execution timeline."""
+    page = STATIC_DIR / "orchestration.html"
+    if page.exists():
+        return FileResponse(str(page))
+    return HTMLResponse("<h1>Orchestration Dashboard</h1><p>orchestration.html not found.</p>")
+
+
 # ── Workflow Execution Engine ─────────────────────────────────────────────────
 
 class StepResult(BaseModel):
@@ -660,6 +903,8 @@ class WorkflowRun(BaseModel):
     context_snapshot: dict[str, Any] = {}
     # Initial input data supplied to the /execute endpoint
     input_data: dict[str, Any] = {}
+    # Which execution engine ran this workflow
+    engine: str = "custom"           # "custom" | "langgraph"
 
 
 _workflow_runs: dict[str, WorkflowRun] = {}
@@ -773,14 +1018,19 @@ async def _startup() -> None:
     Async startup handler — runs before the first request is served.
 
     1. Creates DB tables (PostgreSQL on Railway, SQLite locally).
-    2. Loads persisted runs from the DB into the in-memory cache.
-    3. ``running`` runs cannot be resumed — marked failed.
-    4. ``waiting_hitl`` runs are recovered:
+    2. Initialises the LangGraph checkpointer (if langgraph is installed).
+    3. Loads persisted runs from the DB into the in-memory cache.
+    4. ``running`` runs cannot be resumed — marked failed.
+    5. ``waiting_hitl`` runs are recovered:
          - Already decided in DB  → apply decision, mark completed/failed.
          - Still pending           → restore to _pending, start recovery task
                                      so Approve/Reject keeps working.
     """
     await sqlite_store.init_db()
+
+    # Initialise LangGraph checkpointer (no-op if langgraph not installed)
+    from ui.backend.engine import lg_engine as _lg
+    await _lg.setup_checkpointer()
     for _saved in await sqlite_store.list_runs():
         try:
             _r = WorkflowRun(**_saved)
@@ -823,8 +1073,217 @@ async def _startup() -> None:
         except Exception:
             pass
 
+# ── LangGraph execution helpers ───────────────────────────────────────────────
+
+def _get_run_by_hitl_request(request_id: str) -> "WorkflowRun | None":
+    """Find the WorkflowRun that has this HITL request_id in a step's output."""
+    for run in _workflow_runs.values():
+        for step in run.steps:
+            if step.output.get("hitl_request_id") == request_id:
+                return run
+    return None
+
+
+def _apply_lg_completion(run: "WorkflowRun", wf: Any, lg_state: dict[str, Any]) -> None:
+    """Sync a WorkflowRun from a completed (non-interrupted) LangGraph result."""
+    node_map = {n.node_id: n for n in wf.nodes}
+    ts = time.time()
+    for nid in lg_state.get("completed_nodes", []):
+        wf_node = node_map.get(nid)
+        if not wf_node:
+            continue
+        run.steps.append(StepResult(
+            node_id=nid, node_type=wf_node.node_type, node_name=wf_node.name,
+            status="completed", started_at=run.started_at, completed_at=ts,
+            duration_ms=round((ts - run.started_at) * 1000),
+        ))
+    run.context_snapshot = dict(lg_state.get("data") or {})
+    run.error = lg_state.get("error") or None
+    run.status = "failed" if run.error else "completed"
+    run.completed_at = ts
+
+
+def _apply_lg_hitl_pause(
+    run: "WorkflowRun", wf: Any,
+    interrupt_info: dict[str, Any],
+    lg_state: dict[str, Any],
+) -> None:
+    """Sync a WorkflowRun from a LangGraph run paused at a HITL interrupt."""
+    node_map   = {n.node_id: n for n in wf.nodes}
+    completed  = set(lg_state.get("completed_nodes") or [])
+    ts         = time.time()
+    request_id = interrupt_info.get("request_id", f"req-{uuid.uuid4().hex[:8]}")
+
+    # Build steps for all nodes that ran before the interrupt
+    for nid in (lg_state.get("completed_nodes") or []):
+        wf_node = node_map.get(nid)
+        if not wf_node:
+            continue
+        run.steps.append(StepResult(
+            node_id=nid, node_type=wf_node.node_type, node_name=wf_node.name,
+            status="completed", started_at=run.started_at, completed_at=ts,
+        ))
+
+    # Add the paused HITL step
+    hitl_node = next(
+        (n for n in wf.nodes if n.node_type == "hitl" and n.node_id not in completed),
+        None,
+    )
+    if hitl_node:
+        run.steps.append(StepResult(
+            node_id=hitl_node.node_id, node_type="hitl", node_name=hitl_node.name,
+            status="waiting_hitl", started_at=ts,
+            output={
+                "hitl_request_id": request_id,
+                "action": hitl_node.name,
+                "node":   hitl_node.name,
+            },
+        ))
+
+    run.context_snapshot = dict(lg_state.get("data") or {})
+    run.status = "waiting_hitl"
+
+    # Register in HITL panel so the approvals page shows it
+    req = ApprovalRequest.create(
+        agent_id=f"wf:{run.workflow_id}",
+        correlation_id=run.run_id,
+        action=interrupt_info.get("action", hitl_node.name if hitl_node else "approval"),
+        resource=f"workflow/{run.workflow_name}",
+        context={**interrupt_info.get("context", {}), "run_id": run.run_id},
+        timeout_seconds=3600,
+    )
+    hitl_orchestrator._pending[request_id] = req
+
+    # Also persist to DB so approve/reject works even if the process restarts
+    # (non-blocking — fire-and-forget via asyncio)
+    asyncio.create_task(
+        sqlite_store.create_hitl_pending(request_id, run.run_id,
+                                         hitl_node.node_id if hitl_node else "")
+    )
+
+    audit_logger.log(
+        EventType.HITL_REQUESTED, f"wf:{run.workflow_id}", run.run_id,
+        payload={"request_id": request_id, "action": req.action,
+                 "workflow": run.workflow_name},
+        severity=EventSeverity.WARNING,
+    )
+
+
+async def _run_workflow_lg(run_id: str, input_data: dict[str, Any] | None = None) -> None:
+    """
+    LangGraph execution path.
+
+    Builds/retrieves a compiled StateGraph from the workflow definition,
+    invokes it, and syncs the result back into the in-memory WorkflowRun.
+    If the graph pauses at a HITL node, the run is marked ``waiting_hitl``
+    and the approve/reject endpoint will call ``resume_workflow`` to continue.
+    """
+    from ui.backend.routes.workflows import _store as _wf_store
+    from ui.backend.engine import lg_engine as _lg
+
+    run = _workflow_runs.get(run_id)
+    if not run:
+        return
+
+    wf = _wf_store.get(run.workflow_id)
+    if not wf:
+        run.status = "failed"
+        run.error = "Workflow definition not found"
+        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+        return
+
+    run.engine = "langgraph"
+
+    try:
+        lg_state = await _lg.run_workflow(
+            run_id, wf, dict(input_data or run.input_data or {})
+        )
+    except Exception as exc:
+        run.status = "failed"
+        run.error = str(exc)
+        run.completed_at = time.time()
+        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+        await broadcast({"type": "wf_run_done", "run_id": run_id,
+                         "status": run.status, "workflow_name": run.workflow_name})
+        return
+
+    # Check if the graph paused at a HITL interrupt
+    interrupt_info = _lg.get_interrupt_info(run_id, wf)
+    if interrupt_info:
+        _apply_lg_hitl_pause(run, wf, interrupt_info, lg_state)
+        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+        await broadcast({
+            "type": "wf_step", "run_id": run_id,
+            "status": "waiting_hitl",
+            "hitl_request_id": interrupt_info.get("request_id"),
+        })
+    else:
+        _apply_lg_completion(run, wf, lg_state)
+        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+        await broadcast({"type": "wf_run_done", "run_id": run_id,
+                         "status": run.status, "workflow_name": run.workflow_name})
+
+
+async def _resume_lg_run(run: "WorkflowRun", decision: dict[str, Any]) -> None:
+    """
+    Resume a LangGraph run paused at HITL after the user approves or rejects.
+
+    Called from approve_hitl / reject_hitl when run.engine == "langgraph".
+    """
+    from ui.backend.routes.workflows import _store as _wf_store
+    from ui.backend.engine import lg_engine as _lg
+
+    wf = _wf_store.get(run.workflow_id)
+    if not wf:
+        return
+
+    try:
+        lg_state = await _lg.resume_workflow(run.run_id, wf, decision)
+    except Exception as exc:
+        run.status = "failed"
+        run.error = f"LangGraph resume failed: {exc}"
+        run.completed_at = time.time()
+        await sqlite_store.upsert_run(run.run_id, run.workflow_id, run.model_dump())
+        return
+
+    # Check if paused again (unlikely for a single HITL node, but possible in multi-HITL graphs)
+    interrupt_info = _lg.get_interrupt_info(run.run_id, wf)
+    if interrupt_info:
+        _apply_lg_hitl_pause(run, wf, interrupt_info, lg_state)
+    else:
+        # Merge post-HITL steps with existing steps
+        pre_steps = [s for s in run.steps if s.status != "waiting_hitl"]
+        run.steps = pre_steps
+        _apply_lg_completion(run, wf, lg_state)
+        # Mark the old HITL step as completed
+        hitl_step = next((s for s in run.steps if s.node_type == "hitl"), None)
+        if hitl_step:
+            hitl_step.status = "completed"
+            hitl_step.completed_at = time.time()
+
+    await sqlite_store.upsert_run(run.run_id, run.workflow_id, run.model_dump())
+    await broadcast({"type": "wf_run_done", "run_id": run.run_id,
+                     "status": run.status, "workflow_name": run.workflow_name})
+
+
+# ── Main workflow dispatcher ──────────────────────────────────────────────────
+
 async def _run_workflow(run_id: str, input_data: dict[str, Any] | None = None) -> None:
-    """Background task: walks the workflow DAG and executes each node."""
+    """
+    Dispatch to LangGraph engine (preferred) or custom DAG walker (fallback).
+
+    LangGraph is used when the ``langgraph`` package is installed.
+    Install with:  pip install langgraph langchain-anthropic
+    """
+    from ui.backend.engine import lg_engine as _lg
+    if _lg.is_available():
+        await _run_workflow_lg(run_id, input_data)
+    else:
+        await _run_workflow_custom(run_id, input_data)
+
+
+async def _run_workflow_custom(run_id: str, input_data: dict[str, Any] | None = None) -> None:
+    """Custom DAG-walker fallback (used when langgraph is not installed)."""
     from ui.backend.routes.workflows import _store as _wf_store
     from ui.backend.engine import ExecutionContext, run_node as _engine_run_node
 
