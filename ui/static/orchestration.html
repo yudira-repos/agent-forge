@@ -139,6 +139,32 @@ button.btn-primary:hover { background: #79b8ff; }
     <p>Real-time execution timeline · Per-agent OTEL metrics · Cost tracking · Token usage</p>
   </div>
 
+  <!-- ── CTO Demo panel ── -->
+  <div class="card" style="margin-bottom:16px;border-color:rgba(192,132,252,.35);background:linear-gradient(135deg,rgba(192,132,252,.06) 0%,rgba(16,185,129,.06) 100%)">
+    <div class="card-title" style="margin-bottom:8px">
+      <span class="icon">🚀</span> CTO Demo — Support Ticket AI Triage
+      <span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--muted)">Real Claude + OpenAI · No mocks · Full OTEL</span>
+    </div>
+    <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:300px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+          Workflow: <strong style="color:var(--text)">wf-demo-001</strong> &nbsp;·&nbsp;
+          <span class="badge badge-anthropic">Claude Haiku</span> classify ticket &nbsp;→&nbsp;
+          <span class="badge badge-openai">GPT-4o-mini</span> draft response
+        </div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Input ticket (or leave blank to use built-in sample)</label>
+        <textarea id="demo-input" rows="3" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:5px;font-size:12px;resize:vertical" placeholder='{"ticket_text": "My payment failed with error PAY_DECLINED_3047..."}'></textarea>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:180px">
+        <button class="btn btn-primary" id="demo-btn" onclick="runDemo()" style="font-size:14px;padding:10px 20px;background:linear-gradient(135deg,#8b5cf6,#10b981);border:none">
+          ▶ Run Demo
+        </button>
+        <div id="demo-status" style="font-size:12px;color:var(--muted);min-height:18px"></div>
+        <div id="demo-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:11px;max-height:200px;overflow-y:auto"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Top stats ── -->
   <div class="stat-row">
     <div class="stat">
@@ -508,6 +534,83 @@ renderOtelStatus();
     }
   } catch(e) {}
 })();
+
+// ── CTO Demo runner ────────────────────────────────────────────────────────────
+async function runDemo() {
+  const btn    = document.getElementById('demo-btn');
+  const status = document.getElementById('demo-status');
+  const result = document.getElementById('demo-result');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Running…';
+  status.textContent = 'Sending to Claude + OpenAI…';
+  result.style.display = 'none';
+
+  try {
+    const raw = document.getElementById('demo-input').value.trim();
+    let inputData = {};
+    if (raw) {
+      try { inputData = JSON.parse(raw); }
+      catch { status.textContent = '❌ Input is not valid JSON'; btn.disabled = false; btn.textContent = '▶ Run Demo'; return; }
+    }
+    // Execute the demo workflow — sample data is injected by run_trigger() if input is empty
+    const res = await fetch('/api/workflows/wf-demo-001/execute', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ input_data: inputData }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      status.textContent = `❌ ${err.detail || 'Execute failed'}`;
+      btn.disabled = false; btn.textContent = '▶ Run Demo'; return;
+    }
+    const data = await res.json();
+    const runId = data.run_id || '?';
+    status.innerHTML = `✅ Run started · <strong style="color:var(--accent)">${runId}</strong>`;
+
+    // Poll until complete or failed
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      if (attempts > 30) { clearInterval(poll); status.textContent += ' (timed out)'; btn.disabled = false; btn.textContent = '▶ Run Demo'; return; }
+      try {
+        const sr = await fetch(`/api/workflows/runs/${runId}`);
+        if (!sr.ok) return;
+        const s = await sr.json();
+        const st = s.status;
+        if (st === 'running') {
+          status.innerHTML = `⚙️ Running… · <strong style="color:var(--accent)">${runId}</strong>`;
+          return;
+        }
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '▶ Run Demo';
+        if (st === 'completed') {
+          status.innerHTML = `✅ Completed · <a href="#" onclick="loadTraceById('${runId}');return false" style="color:var(--accent)">${runId}</a>`;
+          // Show key outputs
+          const ctx = s.context_snapshot || {};
+          const lines = [];
+          if (ctx.issue_type)     lines.push(`<b>Issue type:</b> ${ctx.issue_type}`);
+          if (ctx.severity)       lines.push(`<b>Severity:</b> ${ctx.severity}`);
+          if (ctx.affected_area)  lines.push(`<b>Area:</b> ${ctx.affected_area}`);
+          if (ctx.summary)        lines.push(`<b>Summary:</b> ${ctx.summary}`);
+          if (ctx.response_draft) lines.push(`<hr style="border-color:var(--border);margin:6px 0"><b>Draft response:</b><br>${ctx.response_draft}`);
+          if (ctx.priority_level) lines.push(`<b>Priority:</b> ${ctx.priority_level} &nbsp; <b>Assign to:</b> ${ctx.assign_to || '?'} &nbsp; <b>ETA:</b> ${ctx.eta_hours}h`);
+          result.innerHTML = lines.length ? lines.join('<br>') : '<pre style="white-space:pre-wrap">' + JSON.stringify(ctx, null, 2) + '</pre>';
+          result.style.display = 'block';
+          // Refresh trace viewer automatically
+          loadTraceById(runId);
+        } else if (st === 'failed') {
+          status.innerHTML = `❌ Failed · ${s.error || 'see logs'} · run_id: ${runId}`;
+        } else if (st === 'waiting_hitl') {
+          status.innerHTML = `⏸ Waiting for HITL · <strong>${runId}</strong>`;
+        }
+      } catch(e) {}
+    }, 2000);
+  } catch(err) {
+    status.textContent = `❌ ${err.message}`;
+    btn.disabled = false; btn.textContent = '▶ Run Demo';
+  }
+}
 </script>
 </body>
 </html>

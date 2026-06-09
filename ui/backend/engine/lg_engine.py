@@ -244,14 +244,17 @@ def build_graph(workflow: Any, checkpointer: Any) -> Any:
             default_target = unported[0] if unported else END
 
             def _make_router(pm: dict[str, str], dt: Any):
-                def _router(state: WorkflowState) -> str:
-                    return pm.get(state.get("next_port") or "", dt)  # type: ignore[arg-type]
+                # Returns the destination node ID directly.
+                # Do NOT pass a path_map to add_conditional_edges — that would
+                # treat the return value as a key to look up in the map, causing
+                # KeyError when the value is already a node ID (e.g. 'ma7').
+                def _router(state: WorkflowState) -> Any:
+                    return pm.get((state.get("next_port") or "").strip(), dt)
                 return _router
 
             graph.add_conditional_edges(
                 wf_node.node_id,
                 _make_router(port_map, default_target),
-                {**port_map, "__default__": default_target},
             )
 
         else:

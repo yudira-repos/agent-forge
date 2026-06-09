@@ -37,6 +37,10 @@ async def run_trigger(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResu
     In production this is invoked by a webhook receiver or event bridge consumer.
     The trigger node's config describes the expected schema; any ``input_data``
     already seeded into the context (from the /execute payload) is left intact.
+
+    If the node config contains a ``Sample Data`` key (a JSON string) AND the
+    context doesn't already have those fields, the sample data is injected.
+    This lets demo workflows run with one click and no extra input.
     """
     cfg = node.config
     meta = {
@@ -47,6 +51,24 @@ async def run_trigger(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResu
         "run_id": run_id,
     }
     ctx.update(meta)
+
+    # Inject Sample Data when context has no real payload yet
+    sample_raw = cfg.get("Sample Data", "")
+    if sample_raw:
+        try:
+            sample: dict = json.loads(sample_raw)
+            # Only inject fields not already set by the caller's input_data
+            missing = {k: v for k, v in sample.items() if not ctx.get(k)}
+            if missing:
+                ctx.update(missing)
+                meta["_sample_data_injected"] = list(missing.keys())
+                logger.info(
+                    "Trigger '%s': injected sample data keys %s",
+                    node.name, list(missing.keys()),
+                )
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.warning("Trigger '%s': invalid Sample Data JSON — %s", node.name, exc)
+
     return NodeResult(output=meta)
 
 

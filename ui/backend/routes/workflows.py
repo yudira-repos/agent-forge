@@ -236,8 +236,91 @@ def _seed_multiagent() -> None:
     _store[wf.workflow_id] = wf
 
 
+def _seed_demo() -> None:
+    """
+    CTO demo workflow: the simplest possible real end-to-end AI pipeline.
+
+    Flow (4 nodes, no HITL, no conditions)
+    ----------------------------------------
+    Trigger  →  Claude (classify ticket)  →  OpenAI (draft response)  →  Event
+
+    Both agent nodes reference registered AgentManifests so the runner
+    picks the correct vendor automatically.  The trigger node carries
+    ``Sample Data`` in its config — run_trigger() injects it into the
+    context so the workflow runs with one click and no extra input.
+    """
+    wf = WorkflowDefinition(
+        workflow_id="wf-demo-001",
+        name="Support Ticket AI Triage",
+        description=(
+            "CTO demo: a real Claude → OpenAI pipeline that classifies a support ticket "
+            "and drafts a customer response. No HITL, no conditions — pure AI execution."
+        ),
+        version="1.0.0",
+        nodes=[
+            WFNode(
+                node_id="sd1", node_type="trigger",
+                name="Ticket received",
+                x=15, y=165,
+                detail="POST /webhook/ticket",
+                config={
+                    "Method": "POST",
+                    "Path": "/webhook/ticket",
+                    "Sample Data": (
+                        '{"ticket_id": "TKT-20260609-001", '
+                        '"ticket_text": "My payment keeps failing with error code PAY_DECLINED_3047. '
+                        "I've tried three times in the last hour and my card is being charged but the "
+                        'order doesn\'t go through. This is urgent — I need this for a client meeting tomorrow.", '
+                        '"customer_id": "CUST-8821", '
+                        '"channel": "email", '
+                        '"submitted_at": "2026-06-09T07:15:00Z"}'
+                    ),
+                },
+            ),
+            WFNode(
+                node_id="sd2", node_type="agent",
+                name="Classify Ticket (Claude)",
+                x=215, y=165,
+                detail="claude-ticket-classifier · Anthropic",
+                config={
+                    "Agent ID": "claude-ticket-classifier",
+                    "Output": "issue_type, severity, affected_area, summary, key_details",
+                },
+            ),
+            WFNode(
+                node_id="sd3", node_type="agent",
+                name="Draft Response (OpenAI)",
+                x=430, y=165,
+                detail="openai-response-generator · GPT-4o-mini",
+                config={
+                    "Agent ID": "openai-response-generator",
+                    "Output": "response_draft, priority_level, assign_to, eta_hours",
+                },
+            ),
+            WFNode(
+                node_id="sd4", node_type="event",
+                name="Ticket processed",
+                x=645, y=165,
+                detail="ticket.processed · internal",
+                config={
+                    "Topic":  "support.ticket.processed",
+                    "Schema": "TicketProcessedEvent v1",
+                    "Broker": "internal",
+                },
+            ),
+        ],
+        edges=[
+            WFEdge(edge_id="sde1", from_node="sd1", to_node="sd2"),
+            WFEdge(edge_id="sde2", from_node="sd2", to_node="sd3"),
+            WFEdge(edge_id="sde3", from_node="sd3", to_node="sd4"),
+        ],
+    )
+    _store[wf.workflow_id] = wf
+
+
 _seed()
 _seed_multiagent()
+_seed_demo()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

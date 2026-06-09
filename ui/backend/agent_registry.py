@@ -163,6 +163,116 @@ registry.register(AgentManifest(
 ))
 
 
+# ── Seed: CTO Demo agents ─────────────────────────────────────────────────────
+
+registry.register(AgentManifest(
+    agent_id="claude-ticket-classifier",
+    name="Ticket Classifier (Claude)",
+    version="1.0.0",
+    description=(
+        "Classifies a support ticket and extracts structured fields. "
+        "Returns issue_type, severity, affected_area, summary, and key_details."
+    ),
+    owner="support-team",
+    runtime_adapter="anthropic",
+    tags=["support", "classification", "triage"],
+    status=AgentStatus.ACTIVE,
+    capabilities=[
+        AgentCapability(
+            name="classify_ticket",
+            description="Classify and extract fields from a raw support ticket",
+            input_schema={"type": "object", "properties": {"ticket_text": {"type": "string"}}},
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "issue_type":    {"type": "string"},
+                    "severity":      {"type": "string"},
+                    "affected_area": {"type": "string"},
+                    "summary":       {"type": "string"},
+                    "key_details":   {"type": "string"},
+                },
+            },
+            tags=["classification"],
+            idempotent=True,
+        ),
+    ],
+    metadata={
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 512,
+        "system_prompt": (
+            "You are a support ticket classification agent. "
+            "Analyze the ticket_text in the execution context and return a JSON object with: "
+            "issue_type (e.g. 'billing', 'technical', 'account', 'feature_request'), "
+            "severity (one of: low, medium, high, critical), "
+            "affected_area (product area or service name), "
+            "summary (one sentence summary of the issue), "
+            "key_details (any specific error codes, account IDs, or timestamps mentioned). "
+            "Return ONLY a valid JSON object — no markdown, no explanation."
+        ),
+        "output_fields": "issue_type, severity, affected_area, summary, key_details",
+        "cost_per_1k_input":  0.00025,
+        "cost_per_1k_output": 0.00125,
+    },
+))
+
+
+registry.register(AgentManifest(
+    agent_id="openai-response-generator",
+    name="Response Generator (OpenAI)",
+    version="1.0.0",
+    description=(
+        "Drafts a customer-facing response for a classified support ticket. "
+        "Returns response_draft, priority_level, assign_to, and eta_hours."
+    ),
+    owner="support-team",
+    runtime_adapter="openai",
+    tags=["support", "response", "drafting"],
+    status=AgentStatus.ACTIVE,
+    capabilities=[
+        AgentCapability(
+            name="generate_response",
+            description="Draft a support response based on ticket classification",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "issue_type":    {"type": "string"},
+                    "severity":      {"type": "string"},
+                    "summary":       {"type": "string"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "response_draft": {"type": "string"},
+                    "priority_level": {"type": "string"},
+                    "assign_to":      {"type": "string"},
+                    "eta_hours":      {"type": "number"},
+                },
+            },
+            tags=["drafting", "response"],
+            idempotent=True,
+        ),
+    ],
+    metadata={
+        "model": "gpt-4o-mini",
+        "max_tokens": 768,
+        "system_prompt": (
+            "You are a customer support response drafting agent. "
+            "Using the ticket classification data (issue_type, severity, summary, key_details) "
+            "from the execution context, return a JSON object with: "
+            "response_draft (a professional, empathetic 2-3 sentence reply to the customer), "
+            "priority_level (one of: P1, P2, P3, P4 based on severity), "
+            "assign_to (team name: 'billing-team', 'infra-team', 'product-team', or 'tier1-support'), "
+            "eta_hours (estimated resolution hours as a number: 1, 4, 8, 24, or 48). "
+            "Return ONLY a valid JSON object — no markdown, no explanation."
+        ),
+        "output_fields": "response_draft, priority_level, assign_to, eta_hours",
+        "cost_per_1k_input":  0.00015,
+        "cost_per_1k_output": 0.00060,
+    },
+))
+
+
 # ── Seed: OpenAI-managed agent ─────────────────────────────────────────────────
 
 registry.register(AgentManifest(
