@@ -603,14 +603,14 @@ function HITLQueue({onToast, onCountChange, user}) {
           </div>
           <div className="hitl-footer">
             ${can(user,'approve_hitl') && html`
-              <>
+              <${React.Fragment}>
                 <button className="btn btn-success" onClick=${()=>approve(item.request_id, item.action)}>
                   ${Icon.check} Approve
                 </button>
                 <button className="btn btn-danger" onClick=${()=>{setRejectModal(item);setRejectReason('');}}>
                   ${Icon.x} Reject
                 </button>
-              </>
+              </${React.Fragment}>
             `}
             ${!can(user,'approve_hitl') && html`<span className="badge badge-gray">👁 View only — supervisor role required to approve</span>`}
             <span className="text-muted" style=${{marginLeft:'auto', alignSelf:'center'}}>
@@ -905,7 +905,7 @@ function AuthenticatedApp({user, onLogout}) {
     {id:'__escalation', label:'Escalations', icon:Icon.hitl},
   ];
 
-  return html`<>
+  return html`<${React.Fragment}>
     <div className="sidebar">
       <div className="logo">
         <div className="logo-title">⬡ AgentForge</div>
@@ -965,7 +965,7 @@ function AuthenticatedApp({user, onLogout}) {
     </div>
 
     ${toast && html`<${Toast} key=${toast.id} msg=${toast.msg} type=${toast.type} onClose=${()=>setToast(null)}/>`}
-  </>`;
+  </${React.Fragment}>`;
 }
 
 // ── App root ───────────────────────────────────────────────────────────────
