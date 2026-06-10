@@ -417,10 +417,103 @@ def _seed_escalation_demo() -> None:
     _store[wf.workflow_id] = wf
 
 
+def _seed_workflow_hitl_demo() -> None:
+    """
+    Demo workflow showing workflow-level HITL (approval gate between nodes).
+
+    Flow:
+      Trigger (high-value invoice) → Claude extracts fields
+        → HITL (human approves payment over $10k)
+          → Claude generates payment instruction → Event
+
+    This proves workflow-level HITL: the graph fully pauses after the
+    extraction node, waits for a named human to approve, then continues.
+    """
+    wf = WorkflowDefinition(
+        workflow_id="wf-hitl-approval-001",
+        name="Invoice Payment Approval (Workflow HITL)",
+        description=(
+            "Workflow-level HITL demo: Claude extracts a high-value invoice, "
+            "a human must approve before payment instructions are generated. "
+            "Run pauses at the HITL node — prove it by checking GET /api/workflows/runs/{id}"
+        ),
+        version="1.0.0",
+        nodes=[
+            WFNode(
+                node_id="trigger-hitl",
+                node_type="trigger",
+                name="Invoice Trigger",
+                x=80, y=200,
+                detail="Injects a $24,500 invoice (above approval threshold)",
+                config={
+                    "Sample Data": (
+                        '{"ticket_id": "INV-2026-00847", '
+                        '"raw_invoice": "INVOICE #INV-2026-00847\\n'
+                        'Vendor: Apex Cloud Infrastructure Inc.\\n'
+                        'Vendor ID: VENDOR-4421\\n'
+                        'Amount: $24,500.00 USD\\n'
+                        'Due: 2026-07-15\\n'
+                        'Items:\\n'
+                        '  - Dedicated server cluster (3-month prepay): $18,000\\n'
+                        '  - Premium support SLA: $4,500\\n'
+                        '  - Setup and migration fees: $2,000\\n'
+                        'Submitted by: procurement@company.com", '
+                        '"source_system": "accounts_payable"}'
+                    ),
+                },
+            ),
+            WFNode(
+                node_id="agent-extract",
+                node_type="agent",
+                name="Extract Invoice (Claude)",
+                x=280, y=200,
+                detail="claude-invoice-extractor · parses vendor, amount, line items",
+                config={"Agent ID": "claude-invoice-extractor"},
+            ),
+            WFNode(
+                node_id="hitl-approve",
+                node_type="hitl",
+                name="Finance Approval Required",
+                x=480, y=200,
+                detail="Blocks until a finance team member approves — proves real pause",
+                config={
+                    "Action": "Approve payment of $24,500 to VENDOR-4421",
+                    "Approver Role": "finance-manager",
+                    "Threshold Note": "All payments over $10,000 require manual approval",
+                },
+            ),
+            WFNode(
+                node_id="agent-pay",
+                node_type="agent",
+                name="Generate Payment (Claude)",
+                x=680, y=200,
+                detail="claude-payment-processor · generates PAY-XXXXXX reference",
+                config={"Agent ID": "claude-payment-processor"},
+            ),
+            WFNode(
+                node_id="event-done",
+                node_type="event",
+                name="Payment Queued",
+                x=880, y=200,
+                detail="Emits payment_queued event to accounts payable system",
+                config={"Event": "payment.queued"},
+            ),
+        ],
+        edges=[
+            WFEdge(edge_id="e1", from_node="trigger-hitl",  to_node="agent-extract"),
+            WFEdge(edge_id="e2", from_node="agent-extract", to_node="hitl-approve"),
+            WFEdge(edge_id="e3", from_node="hitl-approve",  to_node="agent-pay"),
+            WFEdge(edge_id="e4", from_node="agent-pay",     to_node="event-done"),
+        ],
+    )
+    _store[wf.workflow_id] = wf
+
+
 _seed()
 _seed_multiagent()
 _seed_demo()
 _seed_escalation_demo()
+_seed_workflow_hitl_demo()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

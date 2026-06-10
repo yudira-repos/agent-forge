@@ -904,8 +904,8 @@ function AuthenticatedApp({user, onLogout}) {
     ...(can(user,'view_hitl') ? [{id:'hitl', label:'Approvals', icon:Icon.hitl, badge: hitlCount > 0 ? hitlCount : null}] : []),
     {id:'audit', label:'Audit Trail', icon:Icon.audit},
     {id:'__workflow', label:'Workflows', icon:Icon.agents},
-    {id:'__orchestration', label:'Orchestration ⚡', icon:Icon.grid},
-    {id:'__escalation', label:'Escalations 🚨', icon:Icon.hitl},
+    {id:'__orchestration', label:'Orchestration', icon:Icon.grid},
+    {id:'__escalation', label:'Escalations', icon:Icon.hitl},
   ];
 
   return (
