@@ -649,34 +649,46 @@ async def orchestration_live_sse() -> StreamingResponse:
 
     async def event_generator():
         while True:
-            from ui.backend.observability.otel import get_live_runs, get_agent_metrics
+            from ui.backend.observability.otel import get_agent_metrics, get_run_spans
+            from ui.backend.db import sqlite_store
+
+            # ── Active runs ────────────────────────────────────────────────
             active_runs = []
             for run in sorted(
                 _workflow_runs.values(),
                 key=lambda r: r.started_at,
                 reverse=True,
             )[:10]:
-                from ui.backend.observability.otel import get_run_spans
                 spans = get_run_spans(run.run_id)
                 active_runs.append({
-                    "run_id":       run.run_id,
-                    "workflow_id":  run.workflow_id,
+                    "run_id":        run.run_id,
+                    "workflow_id":   run.workflow_id,
                     "workflow_name": run.workflow_name,
-                    "status":       run.status,
-                    "engine":       run.engine,
-                    "started_at":   run.started_at,
-                    "current_node": run.current_node_id,
-                    "step_count":   len(run.steps),
-                    "span_count":   len(spans),
-                    "total_tokens": sum(s["tokens_in"] + s["tokens_out"] for s in spans),
+                    "status":        run.status,
+                    "engine":        run.engine,
+                    "started_at":    run.started_at,
+                    "current_node":  run.current_node_id,
+                    "step_count":    len(run.steps),
+                    "span_count":    len(spans),
+                    "total_tokens":  sum(s["tokens_in"] + s["tokens_out"] for s in spans),
                     "total_cost_usd": round(sum(s["cost_usd"] for s in spans), 6),
-                    "agents_used":  list({s["agent_id"] for s in spans}),
-                    "recent_spans": spans[-5:],  # last 5 spans for live timeline
+                    "agents_used":   list({s["agent_id"] for s in spans}),
+                    "recent_spans":  spans[-5:],
                 })
+
+            # ── Agent metrics: DB-merged so historical data is never lost ──
+            try:
+                db_metrics = await sqlite_store.get_agent_metrics_from_db()
+            except Exception:
+                db_metrics = []
+            mem_metrics = get_agent_metrics()
+            db_ids = {m["agent_id"] for m in db_metrics}
+            merged_metrics = db_metrics + [m for m in mem_metrics if m["agent_id"] not in db_ids]
+
             payload = json.dumps({
-                "ts":          time.time(),
-                "active_runs": active_runs,
-                "agent_metrics": get_agent_metrics(),
+                "ts":           time.time(),
+                "active_runs":  active_runs,
+                "agent_metrics": merged_metrics,
             })
             yield f"data: {payload}\n\n"
             await asyncio.sleep(2)

@@ -26,6 +26,8 @@ Most agent frameworks are optimised for demos. AgentForge is optimised for produ
 | Sensitive action? | Hope for the best | HITL approval workflow |
 | SOC 2 / HIPAA / GDPR? | Manual paperwork | Built-in compliance profiles |
 | Which LLM? | Hard-coded | Swap adapter in one line |
+| Multi-agent workflow? | Custom glue code | Visual DAG designer + LangGraph |
+| Latency / cost visibility? | None | Per-agent OTEL metrics + trace viewer |
 
 ---
 
@@ -49,8 +51,14 @@ Most agent frameworks are optimised for demos. AgentForge is optimised for produ
 │  ┌────▼─────────────▼───────────────▼─────────────────▼───────┐ │
 │  │                    Auditability SDK                          │ │
 │  │           Structured Events · Tamper-evident Chain          │ │
-│  │                   Replay · Compliance Export                 │ │
+│  │           Replay · Compliance Export · OTEL Spans           │ │
 │  └──────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │               Workflow Engine (custom + LangGraph)          │  │
+│  │   Trigger · Agent · API · Condition · Transform · Loop      │  │
+│  │   Event · SubWorkflow · HITL Gate · LangGraph DAG           │  │
+│  └────────────────────────────────────────────────────────────┘  │
 │                                                                   │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                  Enterprise Agent Runtime                    │  │
@@ -133,7 +141,7 @@ elif decision.is_denied:
 ```
 
 ### 📊 Auditability SDK
-Every agent action, tool call, policy decision, and HITL event is recorded as a **tamper-evident, chained audit event**. Each event links to the previous one via its `previous_event_id` — making silent deletion detectable.
+Every agent action, tool call, policy decision, and HITL event is recorded as a **tamper-evident, chained audit event**. Each event links to the previous one via its `previous_event_id` — making silent deletion detectable. Events are persisted to SQLite and survive server restarts.
 
 ```python
 from agentforge.audit import AuditLogger, AuditTrail, EventType
@@ -152,6 +160,8 @@ violations = trail.violations(since=start_of_quarter)
 
 ### 🧑‍💼 HITL Orchestration
 Async human-in-the-loop approval workflows with configurable **escalation tiers** (L1 → L2 → Exec), timeouts, and pluggable notification callbacks (Slack, email, PagerDuty).
+
+Agent-level escalation is also supported: an agent can pause mid-execution, preserve its full session context, and resume seamlessly after a human decision — without restarting the run.
 
 ```python
 from agentforge.hitl import HITLOrchestrator, EscalationPolicy
@@ -174,15 +184,50 @@ if not decision.approved:
     raise PermissionError(f"Rejected: {decision.reason}")
 ```
 
+### ⚙️ Workflow Engine
+A full **multi-step workflow engine** with a visual DAG designer. Supports two execution backends:
+
+- **Custom engine** — lightweight, zero dependencies, fast startup
+- **LangGraph engine** — LangGraph-powered state machine for complex conditional flows
+
+Node types: `trigger`, `agent`, `api_call`, `condition`, `transform`, `event`, `loop`, `subworkflow`, `hitl_gate`
+
+```python
+# Workflows are defined as JSON and executed by the engine
+workflow = {
+    "workflow_id": "finance-review",
+    "nodes": [
+        {"id": "t1", "type": "trigger",   "config": {"trigger_type": "manual"}},
+        {"id": "a1", "type": "agent",     "config": {"agent_id": "claude-enterprise", "prompt": "Summarise..."}},
+        {"id": "h1", "type": "hitl_gate", "config": {"reviewer_group": "finance-team"}},
+        {"id": "a2", "type": "agent",     "config": {"agent_id": "openai-gpt4o", "prompt": "Generate report..."}},
+    ],
+    "edges": [["t1","a1"], ["a1","h1"], ["h1","a2"]],
+}
+```
+
+### 📡 OTEL Observability
+Per-agent **OpenTelemetry-compatible spans** for every LLM call. Metrics include invocation count, average latency, token usage (in/out), estimated cost, and error rate. The live orchestration dashboard renders spans in real time; the trace viewer replays the full execution timeline of any run. Historical metrics are merged from SQLite so they survive restarts.
+
+```python
+from agentforge.observability.otel import get_agent_metrics, get_run_spans
+
+metrics = get_agent_metrics()
+# → [{"agent_id": "...", "invocations": 42, "avg_latency_ms": 830,
+#      "total_tokens_in": 12400, "total_cost_usd": 0.0148, "error_rate": 0.0}]
+
+spans = get_run_spans("run-abc123")
+# → per-call breakdown for every agent in the run
+```
+
 ### ⚡ Enterprise Agent Runtime
 Framework-agnostic runtime with adapters for **Anthropic Claude**, **OpenAI GPT-4o**, **LangChain/LangGraph**, and **Google Cloud Vertex AI (Gemini)**. Normalised inputs/outputs mean you can swap providers without changing business logic.
 
 ```python
 from agentforge.runtime import AgentRuntime, AgentContext, get_adapter
 
-# Pick any adapter
-adapter = get_adapter("anthropic", api_key="sk-ant-...", model="claude-opus-4-5")
-# adapter = get_adapter("openai", api_key="sk-...", model="gpt-4o")
+adapter = get_adapter("anthropic", api_key="sk-ant-...", model="claude-haiku-4-5-20251001")
+# adapter = get_adapter("openai", api_key="sk-...", model="gpt-4o-mini")
 # adapter = get_adapter("vertex", project="my-gcp-project")
 
 runtime = AgentRuntime(adapter=adapter)
@@ -199,10 +244,10 @@ result = await runtime.invoke(AgentContext.create(
 
 ## Enterprise UI Console
 
-A full-stack dashboard for non-technical and technical users alike — live HITL approvals, audit trail replay, agent registry browser, and real-time event feed.
+A full-stack dashboard for non-technical and technical users — live HITL approvals, workflow execution, agent orchestration, OTEL trace viewer, audit trail replay, and agent registry management.
 
 ```bash
-# 1. Install UI dependencies (one-time)
+# 1. Install dependencies
 pip install "agentforge[dev]" fastapi uvicorn
 
 # 2. Start the console
@@ -211,16 +256,19 @@ python ui/backend/main.py
 # 3. Open http://localhost:8000
 ```
 
-Four screens ship out of the box, pre-loaded with LifeOS demo data:
+Six screens ship out of the box, pre-loaded with LifeOS demo data:
 
-| Screen | What it shows |
-|---|---|
-| **Dashboard** | Agent health grid, recent activity, violation count, HITL queue status |
-| **HITL Approvals** | Pending actions waiting for your decision — approve or reject with reason |
-| **Audit Trail** | Searchable event log with payload inspector and run replay |
-| **Agent Registry** | All registered agents, capabilities, runtime adapters, register new agents |
+| Screen | URL | What it shows |
+|---|---|---|
+| **Dashboard** | `/` | Agent health grid, recent activity, HITL queue badge, violation count |
+| **HITL Approvals** | `/` → Approvals | Pending actions — approve or reject with reason, urgency tiers |
+| **Audit Trail** | `/` → Audit | Searchable tamper-evident event log, payload inspector, run replay |
+| **Agent Registry** | `/` → Registry | All registered agents, capabilities, adapter badges, register new |
+| **Workflow Designer** | `/workflow` | Visual DAG builder — drag nodes, wire edges, execute, view run history |
+| **Orchestration** | `/orchestration` | Live multi-agent runs, per-agent OTEL metrics, trace viewer, cost dashboard |
+| **Escalations** | `/escalation` | Agent-level escalation inbox — resume paused agents with human context |
 
-Real-time WebSocket push keeps the HITL badge and event feed live without refreshing.
+Real-time WebSocket push keeps the HITL badge and event feed live without refreshing. The orchestration dashboard uses Server-Sent Events for 2-second live metrics updates.
 
 ---
 
@@ -252,7 +300,7 @@ flowchart TB
     A2 --> SDK
     A3 --> SDK
     SDK -->|"register · audit · HITL · policy"| API
-    app -->|"REST + WebSocket"| API
+    app -->|"REST + WebSocket + SSE"| API
     API --> UI
     API --> Slack
 ```
@@ -267,10 +315,10 @@ flowchart TB
 │  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘         │
 │        └──────── agentforge SDK ────────┘                │
 └────────────────────────┬─────────────────────────────────┘
-                         │ REST · WebSocket
+                         │ REST · WebSocket · SSE
 ┌────────────────────────▼─────────────────────────────────┐
 │  AgentForge Console (Docker / Railway / K8s)             │
-│  HITL approvals · Audit trail · Registry · Compliance    │
+│  Workflows · Orchestration · HITL · Audit · Registry     │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -278,29 +326,11 @@ flowchart TB
 
 | Mode | Best for | What you use |
 |---|---|---|
-| **Embedded SDK** | Agent code runs in your app (LifeOS backend) | `pip install agentforge` — registry, governance, audit, HITL in-process |
-| **Remote API** | Any language / microservices | `POST /api/agents`, `GET /api/hitl/pending`, `POST /api/hitl/{id}/approve` |
+| **Embedded SDK** | Agent code runs in your app | `pip install agentforge` — registry, governance, audit, HITL in-process |
+| **Remote API** | Any language / microservices | REST endpoints for agents, HITL, audit, workflows |
 | **Hybrid** | Production | SDK in agent services + deployed console for human reviewers |
 
-### LifeOS example
-
-LifeOS is the demo scenario shipped with AgentForge — five personal agents (health, finance, goals, journal, scheduler) owned by `lifeos-core`. The same pattern applies to any multi-agent app.
-
-**Embedded SDK** (runs locally, no server needed):
-
-```bash
-python examples/lifeos_integration.py
-```
-
-**Sync to a running console** (local, Docker, or Railway):
-
-```bash
-python examples/lifeos_integration.py --api-url http://localhost:8000
-python examples/lifeos_integration.py --api-url https://your-app.railway.app
-# → Open console → HITL Approvals → approve the rent transfer
-```
-
-**Minimal SDK integration in your app:**
+### Minimal SDK integration
 
 ```python
 from agentforge.registry import AgentRegistry, AgentManifest, AgentCapability
@@ -312,7 +342,7 @@ registry = AgentRegistry()
 registry.register(AgentManifest(
     agent_id="finance-agent-001",
     name="Finance Manager",
-    owner="lifeos-core",  # or "your-company-core"
+    owner="lifeos-core",
     capabilities=[
         AgentCapability("transfer_funds", "Move money", requires_hitl=True),
     ],
@@ -342,7 +372,7 @@ async def transfer_funds(amount: float, payee: str, run_id: str):
     if not approval.approved:
         raise PermissionError(approval.reason)
 
-    # … execute transfer …
+    # ... execute transfer ...
     audit.tool_completed(agent_id, run_id, "transfer_funds")
 ```
 
@@ -352,20 +382,26 @@ async def transfer_funds(amount: float, payee: str, run_id: str):
 |---|---|---|
 | `/health` | GET | Liveness check |
 | `/api/agents` | GET / POST | List or register agents |
+| `/api/agents/{id}` | GET | Agent details |
+| `/api/agents/{id}/metrics` | GET | Per-agent OTEL metrics |
+| `/api/agents/{id}/deprecate` | PATCH | Deprecate an agent |
 | `/api/hitl/pending` | GET | Pending approval queue |
 | `/api/hitl/{id}/approve` | POST | Approve a HITL request |
 | `/api/hitl/{id}/reject` | POST | Reject a HITL request |
 | `/api/audit` | GET | Search audit events |
 | `/api/audit/{correlation_id}/replay` | GET | Replay a workflow run |
-| `/ws/events` | WebSocket | Real-time event stream |
+| `/api/audit/export` | GET | Export audit log (CSV / JSON) |
+| `/api/workflows` | GET / POST | List or create workflows |
+| `/api/workflows/{id}/execute` | POST | Execute a workflow |
+| `/api/workflows/{id}/runs` | GET | Run history for a workflow |
+| `/api/metrics/agents` | GET | Aggregated metrics for all agents (DB + memory merged) |
+| `/api/metrics/recent` | GET | 50 most recent agent spans |
+| `/api/traces/{run_id}` | GET | Full OTEL trace for a run |
+| `/api/orchestration/live` | SSE | 2-second live stream of active runs + metrics |
+| `/api/escalations/pending` | GET | Paused agents awaiting human context |
+| `/api/escalations/{id}/resume` | POST | Resume a paused agent with human input |
+| `/ws/events` | WebSocket | Real-time event push (HITL, audit, status) |
 | `/docs` | GET | Interactive OpenAPI docs |
-
-Use a shared `correlation_id` (e.g. `run-mon-001`) across all agent actions in a workflow so the audit trail can replay the full decision chain.
-
-See also:
-- [`examples/lifeos_integration.py`](examples/lifeos_integration.py) — LifeOS SDK + API demo
-- [`examples/enterprise_workflow.py`](examples/enterprise_workflow.py) — enterprise payment workflow
-- [`scripts/seed_demo.py`](scripts/seed_demo.py) — load demo data into a running console
 
 ---
 
@@ -415,27 +451,51 @@ See [`examples/enterprise_workflow.py`](examples/enterprise_workflow.py) for a c
 
 ---
 
+## Deploying to Railway
+
+AgentForge ships with a Dockerfile and `railway.toml`. One-click deploy:
+
+```bash
+# Push to your Railway project — it auto-deploys on push
+git push origin main
+```
+
+Set these environment variables in Railway:
+- `ANTHROPIC_API_KEY` — for Claude agents
+- `OPENAI_API_KEY` — for GPT-4o agents (optional)
+- `SECRET_KEY` — JWT secret for the UI console
+
+The health check endpoint is `/health`. Target port is `8000`.
+
+---
+
 ## Design Principles
 
-**Zero mandatory dependencies.** The core package has no required dependencies. LLM SDK packages (`anthropic`, `openai`, etc.) are optional extras. This keeps the framework usable in any environment.
+**Zero mandatory dependencies.** The core package has no required dependencies. LLM SDK packages (`anthropic`, `openai`, etc.) are optional extras.
 
 **Explicit deny wins.** Both the authority scope model and the policy engine use an explicit-deny-wins evaluation strategy. One deny rule stops an action regardless of how many allow rules match.
 
-**Scopes narrow, never widen.** Delegation tokens can only restrict an agent's authority — a delegating agent cannot grant permissions it doesn't hold itself. Trust chains enforce this at construction time.
+**Scopes narrow, never widen.** Delegation tokens can only restrict an agent's authority — a delegating agent cannot grant permissions it doesn't hold itself.
 
 **Audit first.** Every component emits structured events to the `AuditLogger`. The logger is pluggable (console, file, your SIEM). The `AuditTrail` class provides tamper-evidence through chained event IDs.
 
-**Adapters, not abstractions.** The runtime adapters are thin wrappers — they normalise I/O but don't hide provider features. If your LLM provider has a unique capability, you can always access `result.raw_response`.
+**Persistence by default.** All runs, spans, HITL decisions, and audit events are persisted to SQLite and survive server restarts. Historical metrics are DB-merged with live in-memory data so dashboards never show stale-then-blank transitions.
+
+**Adapters, not abstractions.** The runtime adapters are thin wrappers — they normalise I/O but don't hide provider features.
 
 ---
 
 ## Roadmap
 
-- [ ] **v0.2** — PostgreSQL registry backend + Redis HITL queue
-- [ ] **v0.3** — OpenTelemetry trace integration for the Auditability SDK
-- [ ] **v0.4** — Agent-to-agent trust chain verification in the runtime
-- [ ] **v0.5** — OPA (Open Policy Agent) backend for the Governance engine
-- [ ] **v1.0** — Stable API + SDK for custom registry and audit backends
+- [x] **v0.1** — AIAM, Registry, Governance, Auditability SDK, HITL Orchestration
+- [x] **v0.2** — Enterprise UI Console (HITL, Audit, Registry, Dashboard)
+- [x] **v0.3** — Workflow Engine (custom + LangGraph), visual DAG designer
+- [x] **v0.4** — OTEL observability, per-agent metrics, trace viewer, orchestration dashboard
+- [x] **v0.5** — Agent-level escalation, SQLite persistence, real LLM execution
+- [ ] **v0.6** — PostgreSQL + Redis backends for registry and HITL queue
+- [ ] **v0.7** — OPA (Open Policy Agent) backend for the Governance engine
+- [ ] **v0.8** — Agent-to-agent trust chain verification at runtime
+- [ ] **v1.0** — Stable API + SDK, custom registry and audit backends, SLA guarantees
 
 ---
 
