@@ -320,6 +320,17 @@ button.btn-primary:hover { background: #79b8ff; }
 </div><!-- /page -->
 
 <script>
+/* ── UI Activity Logger ──────────────────────────────────────────────────── */
+function uiLog(action, details) {
+  try {
+    fetch('/api/ui-activity', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({screen:'orchestration', action, details: details||{}, ts: Date.now()/1000}),
+    });
+  } catch(e) {}
+}
+
 // ── SSE connection ──────────────────────────────────────────────────────────
 let es;
 let lastData = {};
@@ -460,6 +471,7 @@ async function renderOtelStatus() {
 async function loadTrace() {
   const runId = document.getElementById('trace-run-id').value.trim();
   if (!runId) return;
+  uiLog('trace_load', {run_id: runId});
   await loadTraceById(runId);
 }
 
@@ -502,6 +514,10 @@ function renderTraceBars(spans) {
 
 // ── Register agent ──────────────────────────────────────────────────────────
 async function registerAgent() {
+  uiLog('agent_register', {
+    agent_id: document.getElementById('reg-id').value.trim(),
+    adapter: document.getElementById('reg-adapter').value,
+  });
   const payload = {
     agent_id: document.getElementById('reg-id').value.trim(),
     name:     document.getElementById('reg-name').value.trim(),
@@ -563,6 +579,7 @@ renderOtelStatus();
 
 // ── CTO Demo runner ────────────────────────────────────────────────────────────
 async function runDemo() {
+  uiLog('demo_run', {workflow: 'wf-demo-001'});
   const btn    = document.getElementById('demo-btn');
   const status = document.getElementById('demo-status');
   const result = document.getElementById('demo-result');

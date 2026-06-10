@@ -839,6 +839,40 @@ def list_correlations() -> list[str]:
                  if e.correlation_id not in seen and not seen.add(e.correlation_id)})  # type: ignore
 
 
+# ── Routes: UI Activity Log ───────────────────────────────────────────────────
+class UIActivityPayload(BaseModel):
+    screen: str          # "console" | "workflow" | "escalation" | "orchestration"
+    action: str          # e.g. "login_success", "hitl_approve", "workflow_execute"
+    details: dict[str, Any] = {}
+    ts: float = 0.0      # client-side unix timestamp
+
+
+@app.post("/api/ui-activity")
+async def log_ui_activity(payload: UIActivityPayload) -> dict[str, Any]:
+    """
+    Record a UI interaction event in the audit trail.
+
+    Called fire-and-forget from every significant user action (login, logout,
+    HITL approve/reject, workflow execute, escalation resolve, etc.).  Events
+    appear in the Audit Trail as ``ui.<action>`` so operators can reconstruct
+    exactly who clicked what and when.
+    """
+    corr_id = f"ui-{payload.screen}-{uuid.uuid4().hex[:8]}"
+    try:
+        audit_logger.log(
+            EventType.CUSTOM,
+            agent_id=f"ui/{payload.screen}",
+            correlation_id=corr_id,
+            payload={"action": payload.action, "screen": payload.screen,
+                     "client_ts": payload.ts or time.time(), **payload.details},
+            severity=EventSeverity.INFO,
+            metadata={"event_label": f"ui.{payload.action}"},
+        )
+    except Exception:
+        pass  # never fail the UI for a logging error
+    return {"logged": True, "event_id": corr_id}
+
+
 # ── WebSocket ──────────────────────────────────────────────────────────────────
 @app.websocket("/ws/events")
 async def ws_events(websocket: WebSocket) -> None:

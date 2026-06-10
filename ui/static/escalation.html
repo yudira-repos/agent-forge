@@ -342,7 +342,7 @@
   <div class="topbar">
     <h1>🚨 Agent Escalations</h1>
     <span class="topbar-sub">— human-in-the-loop review queue</span>
-    <button class="refresh-btn" onclick="loadEscalations()">↻ Refresh</button>
+    <button class="refresh-btn" onclick="uiLog('escalation_refresh',{});loadEscalations()">↻ Refresh</button>
   </div>
 
   <div class="content">
@@ -368,6 +368,17 @@
 </div>
 
 <script>
+/* ── UI Activity Logger ───────────────────────────────────────────────── */
+function uiLog(action, details) {
+  try {
+    fetch('/api/ui-activity', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({screen:'escalation', action, details: details||{}, ts: Date.now()/1000}),
+    });
+  } catch(e) {}
+}
+
 /* ─────────────────── State ─────────────────── */
 let _escalations = [];
 let _selected    = null;
@@ -437,6 +448,7 @@ function renderList() {
 
 /* ─────────────────── Select / detail ─────────────────── */
 async function selectEscalation(id) {
+  uiLog('escalation_view', {escalation_id: id});
   _selected = id;
   renderList(); // re-render to show selection highlight
 
@@ -577,6 +589,7 @@ async function submitResolution(escId) {
 
   if (!cat) { showToast('Please enter a category', 'error'); return; }
 
+  uiLog('escalation_resolve', {escalation_id: escId, category: cat, reviewer});
   const btn = document.getElementById(`btn-${escId}`);
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner">⌛</span> Resolving…';
