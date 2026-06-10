@@ -81,9 +81,29 @@ def _system_prompt(node: Any, manifest: Any | None) -> str:
 
 def _user_message(node: Any, ctx: ExecutionContext) -> str:
     cfg = node.config
+
+    # ── Re-run after human escalation resolution ──────────────────────────────
+    human_resolution = ctx.get("_human_resolution")
+    if human_resolution:
+        category  = human_resolution.get("category", "unknown")
+        notes     = human_resolution.get("notes", "no additional notes")
+        reviewer  = human_resolution.get("reviewer_id", "human reviewer")
+        ctx_clean = {k: v for k, v in ctx.snapshot().items() if not k.startswith("_")}
+        ctx_json  = json.dumps(ctx_clean, indent=2, default=str)
+        return (
+            f"ESCALATION RESOLVED — a human reviewer has made a determination.\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Reviewer: {reviewer}\n"
+            f"Assigned category: {category}\n"
+            f"Reviewer notes: {notes}\n\n"
+            f"Using this human-assigned category, produce your final output now.\n"
+            f"IMPORTANT: Do NOT escalate again — a human has already resolved this.\n\n"
+            f"## Execution context\n```json\n{ctx_json}\n```"
+        )
+
+    # ── Normal first-run message ──────────────────────────────────────────────
     ctx_json = json.dumps(ctx.snapshot(), indent=2, default=str)
     header = f"## Current execution context\n```json\n{ctx_json}\n```"
-
     custom = cfg.get("Prompt", "").strip()
     if custom:
         rendered = ctx.render_template(custom)
@@ -297,16 +317,86 @@ async def run_agent(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResult
             output, tokens_in, tokens_out = await _call_openai(node, ctx, manifest)
         else:
             output = _mock_agent(node, ctx, manifest)
-            # Simulate realistic token counts for the mock so the metrics
-            # dashboard has something interesting to display
             tokens_in  = len(json.dumps(ctx.snapshot())) // 4
             tokens_out = len(json.dumps(output)) // 4
 
     except Exception as exc:
         error_msg = str(exc)
         logger.error("Agent '%s' failed: %s", node.name, exc, exc_info=True)
-        # Return a minimal output so the workflow can continue (no hard crash)
         output = {"_error": error_msg, "_agent": node.name}
+
+    # ── Agent-level escalation detection ──────────────────────────────────────
+    # An agent can signal that it needs human input by including "escalate": true
+    # in its JSON response alongside reason, confidence, and candidates.
+    # We only escalate on the FIRST run — re-runs after resolution never escalate.
+    if output.get("escalate") and not ctx.get("_human_resolution"):
+        import uuid as _uuid
+        escalation_id = _uuid.uuid4().hex[:16]
+
+        # Reconstruct the conversation that led to this escalation
+        # (for session reconstruction when the human resolves it)
+        conversation = [
+            {"role": "system",    "content": _system_prompt(node, manifest)[:3000]},
+            {"role": "user",      "content": _user_message(node, ctx)[:4000]},
+            {"role": "assistant", "content": json.dumps(output)[:1000]},
+        ]
+
+        logger.warning(
+            "Agent '%s' escalating: reason=%r confidence=%.2f candidates=%s escalation_id=%s",
+            node.name, output.get("reason", ""),
+            float(output.get("confidence", 0)),
+            output.get("candidates", []),
+            escalation_id,
+        )
+
+        # Persist the escalation so it survives restarts and is reviewable
+        try:
+            from ui.backend.db.sqlite_store import write_escalation
+            await write_escalation({
+                "escalation_id":        escalation_id,
+                "agent_id":             agent_id,
+                "agent_name":           agent_name,
+                "run_id":               run_id,
+                "workflow_id":          workflow_id,
+                "node_id":              node.node_id,
+                "reason":               str(output.get("reason", "classification confidence too low")),
+                "confidence":           float(output.get("confidence", 0)),
+                "candidates":           json.dumps(output.get("candidates", [])),
+                "context_snapshot":     json.dumps(
+                    {k: v for k, v in ctx.snapshot().items() if not k.startswith("_")},
+                    default=str,
+                ),
+                "conversation_history": json.dumps(conversation, default=str),
+                "partial_output":       json.dumps(output, default=str),
+                "created_at":           time.time(),
+            })
+        except Exception as db_exc:
+            logger.warning("Escalation DB write failed (non-fatal): %s", db_exc)
+
+        # Record a span for this escalation attempt
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        try:
+            from ui.backend.observability.otel import record_span
+            record_span(
+                agent_id=agent_id, agent_name=agent_name,
+                run_id=run_id, workflow_id=workflow_id,
+                backend=use_backend, model=model,
+                latency_ms=latency_ms, tokens_in=tokens_in, tokens_out=tokens_out,
+                success=True, error=None,
+                cost_per_1k_input=cost_in, cost_per_1k_output=cost_out,
+            )
+        except Exception:
+            pass
+
+        return NodeResult(output={
+            "_escalating":            True,
+            "_escalation_id":         escalation_id,
+            "_escalation_reason":     str(output.get("reason", "")),
+            "_escalation_confidence": float(output.get("confidence", 0)),
+            "_candidates":            output.get("candidates", []),
+            "_agent_name":            agent_name,
+            "_agent_id":              agent_id,
+        })
 
     latency_ms = (time.perf_counter() - t0) * 1000.0
 

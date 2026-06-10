@@ -153,6 +153,9 @@ async def init_db() -> None:
                 """)
         await asyncio.to_thread(_create)
 
+    # Agent escalations table (agent-level HITL)
+    await init_escalations_table()
+
 
 # ── Workflow runs ─────────────────────────────────────────────────────────────
 
@@ -459,6 +462,211 @@ async def get_agent_metrics_from_db() -> list[dict[str, Any]]:
                 inv = d["invocations"] or 1
                 d["error_rate"] = round((d["failures"] or 0) / inv, 4)
                 d["total_cost_usd"] = round(float(d["total_cost_usd"] or 0), 6)
+                result.append(d)
+            return result
+        return await asyncio.to_thread(_fn)
+
+
+# ── Agent escalations ─────────────────────────────────────────────────────────
+
+async def init_escalations_table() -> None:
+    """
+    Create the agent_escalations table.  Called from init_db().
+
+    Stores everything needed to reconstruct the agent's session when the
+    human resolves the escalation:
+      - conversation_history  — messages sent to the LLM (JSON)
+      - context_snapshot      — full workflow context at escalation time (JSON)
+      - partial_output        — what the LLM returned before deciding to escalate (JSON)
+      - candidates            — categories/options the agent was unsure between (JSON array)
+    """
+    if _PG:
+        p = await _pool()
+        async with p.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_escalations (
+                    escalation_id        TEXT PRIMARY KEY,
+                    agent_id             TEXT NOT NULL,
+                    agent_name           TEXT NOT NULL,
+                    run_id               TEXT NOT NULL,
+                    workflow_id          TEXT NOT NULL,
+                    node_id              TEXT NOT NULL,
+                    reason               TEXT NOT NULL DEFAULT '',
+                    confidence           DOUBLE PRECISION DEFAULT 0.0,
+                    candidates           TEXT DEFAULT '[]',
+                    context_snapshot     TEXT DEFAULT '{}',
+                    conversation_history TEXT DEFAULT '[]',
+                    partial_output       TEXT DEFAULT '{}',
+                    status               TEXT NOT NULL DEFAULT 'pending',
+                    created_at           DOUBLE PRECISION NOT NULL,
+                    resolved_at          DOUBLE PRECISION,
+                    resolved_by          TEXT,
+                    resolution           TEXT
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_esc_run_id ON agent_escalations (run_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_esc_status ON agent_escalations (status)"
+            )
+    else:
+        def _create() -> None:
+            with _sqlite_conn() as c:
+                c.executescript("""
+                    CREATE TABLE IF NOT EXISTS agent_escalations (
+                        escalation_id        TEXT PRIMARY KEY,
+                        agent_id             TEXT NOT NULL,
+                        agent_name           TEXT NOT NULL,
+                        run_id               TEXT NOT NULL,
+                        workflow_id          TEXT NOT NULL,
+                        node_id              TEXT NOT NULL,
+                        reason               TEXT NOT NULL DEFAULT '',
+                        confidence           REAL DEFAULT 0.0,
+                        candidates           TEXT DEFAULT '[]',
+                        context_snapshot     TEXT DEFAULT '{}',
+                        conversation_history TEXT DEFAULT '[]',
+                        partial_output       TEXT DEFAULT '{}',
+                        status               TEXT NOT NULL DEFAULT 'pending',
+                        created_at           REAL NOT NULL,
+                        resolved_at          REAL,
+                        resolved_by          TEXT,
+                        resolution           TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_esc_run_id ON agent_escalations (run_id);
+                    CREATE INDEX IF NOT EXISTS idx_esc_status  ON agent_escalations (status);
+                """)
+        await asyncio.to_thread(_create)
+
+
+async def write_escalation(esc: dict[str, Any]) -> None:
+    """Persist a new agent escalation record."""
+    if _PG:
+        p = await _pool()
+        await p.execute("""
+            INSERT INTO agent_escalations
+              (escalation_id, agent_id, agent_name, run_id, workflow_id, node_id,
+               reason, confidence, candidates, context_snapshot,
+               conversation_history, partial_output, status, created_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13)
+            ON CONFLICT (escalation_id) DO NOTHING
+        """,
+            esc["escalation_id"], esc["agent_id"], esc["agent_name"],
+            esc["run_id"], esc["workflow_id"], esc["node_id"],
+            esc.get("reason", ""), float(esc.get("confidence", 0)),
+            esc.get("candidates", "[]"), esc.get("context_snapshot", "{}"),
+            esc.get("conversation_history", "[]"), esc.get("partial_output", "{}"),
+            esc["created_at"],
+        )
+    else:
+        def _fn() -> None:
+            with _sqlite_conn() as c:
+                c.execute("""
+                    INSERT OR IGNORE INTO agent_escalations
+                      (escalation_id, agent_id, agent_name, run_id, workflow_id, node_id,
+                       reason, confidence, candidates, context_snapshot,
+                       conversation_history, partial_output, status, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)
+                """, (
+                    esc["escalation_id"], esc["agent_id"], esc["agent_name"],
+                    esc["run_id"], esc["workflow_id"], esc["node_id"],
+                    esc.get("reason", ""), float(esc.get("confidence", 0)),
+                    esc.get("candidates", "[]"), esc.get("context_snapshot", "{}"),
+                    esc.get("conversation_history", "[]"), esc.get("partial_output", "{}"),
+                    esc["created_at"],
+                ))
+        await asyncio.to_thread(_fn)
+
+
+async def resolve_escalation(
+    escalation_id: str, resolution: dict[str, Any], resolved_by: str = "human"
+) -> None:
+    """Mark an escalation as resolved with the human's decision."""
+    now = time.time()
+    resolution_json = json.dumps(resolution)
+    if _PG:
+        p = await _pool()
+        await p.execute("""
+            UPDATE agent_escalations
+            SET status='resolved', resolved_at=$1, resolved_by=$2, resolution=$3
+            WHERE escalation_id=$4
+        """, now, resolved_by, resolution_json, escalation_id)
+    else:
+        def _fn() -> None:
+            with _sqlite_conn() as c:
+                c.execute("""
+                    UPDATE agent_escalations
+                    SET status='resolved', resolved_at=?, resolved_by=?, resolution=?
+                    WHERE escalation_id=?
+                """, (now, resolved_by, resolution_json, escalation_id))
+        await asyncio.to_thread(_fn)
+
+
+async def get_escalation(escalation_id: str) -> dict[str, Any] | None:
+    """Load a single escalation by ID."""
+    if _PG:
+        p = await _pool()
+        row = await p.fetchrow(
+            "SELECT * FROM agent_escalations WHERE escalation_id=$1", escalation_id
+        )
+        if not row:
+            return None
+        d = dict(row)
+        for field in ("candidates", "context_snapshot", "conversation_history", "partial_output", "resolution"):
+            if isinstance(d.get(field), str):
+                try:
+                    d[field] = json.loads(d[field])
+                except Exception:
+                    pass
+        return d
+    else:
+        def _fn() -> dict[str, Any] | None:
+            with _sqlite_conn() as c:
+                row = c.execute(
+                    "SELECT * FROM agent_escalations WHERE escalation_id=?", (escalation_id,)
+                ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            for field in ("candidates", "context_snapshot", "conversation_history", "partial_output", "resolution"):
+                if isinstance(d.get(field), str):
+                    try:
+                        d[field] = json.loads(d[field])
+                    except Exception:
+                        pass
+            return d
+        return await asyncio.to_thread(_fn)
+
+
+async def list_pending_escalations() -> list[dict[str, Any]]:
+    """Return all unresolved agent escalations, newest first."""
+    if _PG:
+        p = await _pool()
+        rows = await p.fetch(
+            "SELECT * FROM agent_escalations WHERE status='pending' ORDER BY created_at DESC"
+        )
+        result = []
+        for row in rows:
+            d = dict(row)
+            for f in ("candidates", "context_snapshot", "partial_output"):
+                if isinstance(d.get(f), str):
+                    try: d[f] = json.loads(d[f])
+                    except Exception: pass
+            result.append(d)
+        return result
+    else:
+        def _fn() -> list[dict[str, Any]]:
+            with _sqlite_conn() as c:
+                rows = c.execute(
+                    "SELECT * FROM agent_escalations WHERE status='pending' ORDER BY created_at DESC"
+                ).fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                for f in ("candidates", "context_snapshot", "partial_output"):
+                    if isinstance(d.get(f), str):
+                        try: d[f] = json.loads(d[f])
+                        except Exception: pass
                 result.append(d)
             return result
         return await asyncio.to_thread(_fn)

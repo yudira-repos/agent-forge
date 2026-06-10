@@ -163,6 +163,133 @@ registry.register(AgentManifest(
 ))
 
 
+# ── Seed: Escalation demo agents ──────────────────────────────────────────────
+
+registry.register(AgentManifest(
+    agent_id="openai-ambiguous-classifier",
+    name="Ambiguous Ticket Classifier (OpenAI)",
+    version="1.0.0",
+    description=(
+        "Classifies support tickets using GPT-4o-mini with strict confidence thresholds. "
+        "When the ticket spans multiple categories or confidence < 0.70, the agent signals "
+        "escalation with 'escalate: true' so a human can assign the primary category. "
+        "This is the canonical pattern for agent-level HITL in AgentForge."
+    ),
+    owner="support-team",
+    runtime_adapter="openai",
+    tags=["support", "classification", "escalation", "hitl"],
+    status=AgentStatus.ACTIVE,
+    capabilities=[
+        AgentCapability(
+            name="classify_with_escalation",
+            description=(
+                "Classify a support ticket; escalate to human if confidence < 0.70 "
+                "or the ticket spans multiple categories"
+            ),
+            input_schema={"type": "object", "properties": {"ticket_text": {"type": "string"}}},
+            output_schema={
+                "type": "object",
+                "oneOf": [
+                    {
+                        "description": "Confident classification",
+                        "properties": {
+                            "issue_type": {"type": "string"},
+                            "severity":   {"type": "string"},
+                            "confidence": {"type": "number"},
+                            "affected_area": {"type": "string"},
+                            "summary": {"type": "string"},
+                        },
+                    },
+                    {
+                        "description": "Escalation request",
+                        "properties": {
+                            "escalate":          {"type": "boolean", "const": True},
+                            "reason":            {"type": "string"},
+                            "confidence":        {"type": "number"},
+                            "candidates":        {"type": "array"},
+                            "human_input_needed":{"type": "string"},
+                        },
+                    },
+                ],
+            },
+            tags=["classification", "escalation"],
+            idempotent=True,
+        ),
+    ],
+    metadata={
+        "model": "gpt-4o-mini",
+        "max_tokens": 512,
+        "system_prompt": (
+            "You are a support ticket classification agent with strict confidence requirements.\n\n"
+            "Analyze the ticket and classify into ONE of: billing, technical, account, feature_request, other.\n\n"
+            "If confidence >= 0.70, return this JSON:\n"
+            '{"issue_type":"<category>","severity":"<low|medium|high|critical>",'
+            '"confidence":<0.70-1.0>,"affected_area":"<area>",'
+            '"summary":"<one sentence>","key_details":"<specific codes or IDs>"}\n\n'
+            "If confidence < 0.70 (ticket is ambiguous or spans multiple categories), return:\n"
+            '{"escalate":true,"reason":"<why you cannot classify confidently>",'
+            '"confidence":<0.0-0.69>,"candidates":["<cat1>","<cat2>"],'
+            '"human_input_needed":"Please review and assign the primary category"}\n\n'
+            "Return ONLY valid JSON, no markdown."
+        ),
+        "output_fields": "issue_type, severity, confidence, affected_area, summary, key_details",
+        "cost_per_1k_input":  0.00015,
+        "cost_per_1k_output": 0.00060,
+    },
+))
+
+registry.register(AgentManifest(
+    agent_id="claude-escalation-responder",
+    name="Escalation Response Drafter (Claude)",
+    version="1.0.0",
+    description=(
+        "Drafts a customer response after a human-resolved ticket classification. "
+        "Aware of the escalation context — references the human reviewer's notes "
+        "and assigns appropriate SLA and routing."
+    ),
+    owner="support-team",
+    runtime_adapter="anthropic",
+    tags=["support", "response", "post-escalation"],
+    status=AgentStatus.ACTIVE,
+    capabilities=[
+        AgentCapability(
+            name="draft_post_escalation_response",
+            description="Draft customer response using human-resolved classification",
+            input_schema={"type": "object"},
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "response_draft": {"type": "string"},
+                    "priority_level": {"type": "string"},
+                    "assign_to":      {"type": "string"},
+                    "sla_hours":      {"type": "number"},
+                    "escalation_note":{"type": "string"},
+                },
+            },
+            tags=["response", "post-escalation"],
+            idempotent=True,
+        ),
+    ],
+    metadata={
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 768,
+        "system_prompt": (
+            "You are a support response drafting agent. The ticket has been classified "
+            "by a human reviewer after the AI escalated due to ambiguity.\n\n"
+            "Use issue_type, severity, summary, _human_category, and _human_notes from "
+            "the execution context to draft a professional customer response.\n\n"
+            "Return JSON with: response_draft (2-3 sentences to the customer), "
+            "priority_level (P1/P2/P3/P4), assign_to (team name), "
+            "sla_hours (number), escalation_note (one sentence about why this was escalated). "
+            "Return ONLY valid JSON, no markdown."
+        ),
+        "output_fields": "response_draft, priority_level, assign_to, sla_hours, escalation_note",
+        "cost_per_1k_input":  0.00025,
+        "cost_per_1k_output": 0.00125,
+    },
+))
+
+
 # ── Seed: CTO Demo agents ─────────────────────────────────────────────────────
 
 registry.register(AgentManifest(

@@ -164,6 +164,71 @@ def _make_node_fn(wf_node: Any):
 
         result = await runner(wf_node, ctx, run_id)
 
+        # ── Agent-level escalation ─────────────────────────────────────────────
+        # The agent runner returns _escalating=True when the LLM signals it
+        # needs human input (low confidence, ambiguous category, etc.).
+        #
+        # interrupt() suspends the graph HERE and checkpoints everything to the
+        # configured checkpointer (Postgres on Railway, MemorySaver locally).
+        # When the human resolves via POST /api/escalations/{id}/resolve, the
+        # caller invokes resume_workflow(run_id, wf, decision) which calls
+        # graph.ainvoke(Command(resume=decision), config=config).
+        # LangGraph continues execution from the line AFTER interrupt() with
+        # decision = the human's resolution dict.
+        if result.output.get("_escalating"):
+            escalation_id = result.output["_escalation_id"]
+            logger.info(
+                "Node '%s': agent escalation detected — id=%s reason=%r",
+                wf_node.name, escalation_id, result.output.get("_escalation_reason", ""),
+            )
+
+            # Suspend graph — LangGraph checkpoints everything; returns to ainvoke() caller.
+            # On resume: decision = {"category": "...", "notes": "...", "reviewer_id": "..."}
+            decision: dict[str, Any] = interrupt({
+                "type":           "agent_escalation",
+                "escalation_id":  escalation_id,
+                "agent_id":       result.output.get("_agent_id", wf_node.node_id),
+                "agent_name":     result.output.get("_agent_name", wf_node.name),
+                "reason":         result.output.get("_escalation_reason", ""),
+                "confidence":     result.output.get("_escalation_confidence", 0),
+                "candidates":     result.output.get("_candidates", []),
+                "run_id":         run_id,
+                "workflow_id":    state["workflow_id"],
+            })
+
+            # ── Execution resumes here after human resolves ────────────────────
+            logger.info(
+                "Node '%s': escalation resolved by '%s' → category='%s'",
+                wf_node.name,
+                decision.get("reviewer_id", "human"),
+                decision.get("category", "unknown"),
+            )
+
+            # Inject the human's decision into the shared context
+            ctx.set("_human_resolution",    decision)
+            ctx.set("_human_category",      decision.get("category", ""))
+            ctx.set("_human_notes",         decision.get("notes", ""))
+            ctx.set("_escalation_id",       escalation_id)
+            ctx.set("_escalation_resolver", decision.get("reviewer_id", "human"))
+
+            # Re-run the same agent — _user_message() detects _human_resolution
+            # and generates a resolution-aware prompt; the agent won't escalate again.
+            result = await runner(wf_node, ctx, run_id)
+
+            # Mark escalation resolved in DB (fire-and-forget)
+            try:
+                import asyncio as _aio
+                from ui.backend.db.sqlite_store import resolve_escalation
+                _aio.get_running_loop().create_task(
+                    resolve_escalation(
+                        escalation_id, decision,
+                        resolved_by=decision.get("reviewer_id", "human"),
+                    )
+                )
+            except Exception:
+                pass
+
+        # ── Normal result handling ─────────────────────────────────────────────
         if result.error:
             return {
                 "error": result.error,

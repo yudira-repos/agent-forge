@@ -875,6 +875,15 @@ def serve_orchestration() -> FileResponse:
     return HTMLResponse("<h1>Orchestration Dashboard</h1><p>orchestration.html not found.</p>")
 
 
+@app.get("/escalation")
+def serve_escalation() -> FileResponse:
+    """Agent escalation review queue — human-in-the-loop classification."""
+    page = STATIC_DIR / "escalation.html"
+    if page.exists():
+        return FileResponse(str(page))
+    return HTMLResponse("<h1>Escalations</h1><p>escalation.html not found.</p>")
+
+
 # ── Workflow Execution Engine ─────────────────────────────────────────────────
 
 class StepResult(BaseModel):
@@ -1207,16 +1216,31 @@ async def _run_workflow_lg(run_id: str, input_data: dict[str, Any] | None = None
                          "status": run.status, "workflow_name": run.workflow_name})
         return
 
-    # Check if the graph paused at a HITL interrupt
+    # Check if the graph paused at any interrupt (HITL or agent escalation)
     interrupt_info = _lg.get_interrupt_info(run_id, wf)
     if interrupt_info:
-        _apply_lg_hitl_pause(run, wf, interrupt_info, lg_state)
-        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
-        await broadcast({
-            "type": "wf_step", "run_id": run_id,
-            "status": "waiting_hitl",
-            "hitl_request_id": interrupt_info.get("request_id"),
-        })
+        interrupt_type = interrupt_info.get("type", "hitl")
+        if interrupt_type == "agent_escalation":
+            # Agent-level escalation: pause run, show in escalation review UI
+            run.status = "waiting_agent_escalation"
+            run.context_snapshot = dict(lg_state.get("data") or {})
+            run.error = None
+            await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+            await broadcast({
+                "type": "wf_step", "run_id": run_id,
+                "status": "waiting_agent_escalation",
+                "escalation_id": interrupt_info.get("escalation_id"),
+                "agent_name":    interrupt_info.get("agent_name"),
+                "reason":        interrupt_info.get("reason"),
+            })
+        else:
+            _apply_lg_hitl_pause(run, wf, interrupt_info, lg_state)
+            await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+            await broadcast({
+                "type": "wf_step", "run_id": run_id,
+                "status": "waiting_hitl",
+                "hitl_request_id": interrupt_info.get("request_id"),
+            })
     else:
         _apply_lg_completion(run, wf, lg_state)
         await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
@@ -1589,6 +1613,99 @@ async def execute_workflow(
 
     background_tasks.add_task(_run_workflow, run_id, payload.input_data)
     return {"run_id": run_id, "status": "started"}
+
+
+# ── Agent Escalation endpoints ────────────────────────────────────────────────
+
+@app.get("/api/escalations")
+async def list_escalations() -> list[dict[str, Any]]:
+    """Return all pending agent escalations (newest first)."""
+    return await sqlite_store.list_pending_escalations()
+
+
+@app.get("/api/escalations/{escalation_id}")
+async def get_escalation(escalation_id: str) -> dict[str, Any]:
+    """Return full context for a single escalation (includes conversation history)."""
+    esc = await sqlite_store.get_escalation(escalation_id)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    return esc
+
+
+class EscalationResolutionPayload(BaseModel):
+    """Human reviewer's decision for an agent escalation."""
+    category: str
+    notes: str = ""
+    reviewer_id: str = "human-reviewer"
+
+
+@app.post("/api/escalations/{escalation_id}/resolve")
+async def resolve_escalation_endpoint(
+    escalation_id: str,
+    payload: EscalationResolutionPayload,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    """
+    Human resolves an agent escalation.
+
+    1. Load the escalation to find the associated run_id.
+    2. Mark the escalation resolved in the DB.
+    3. Resume the paused LangGraph run with the human's decision.
+    """
+    from ui.backend.engine import lg_engine as _lg
+    from ui.backend.routes.workflows import _store as _wf_store
+
+    esc = await sqlite_store.get_escalation(escalation_id)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    if esc.get("status") != "pending":
+        raise HTTPException(status_code=409, detail=f"Escalation already {esc.get('status')}")
+
+    run_id = esc["run_id"]
+    run = _workflow_runs.get(run_id)
+
+    # Mark the run as resuming (visible in the runs list immediately)
+    if run:
+        run.status = "running"
+
+    decision = {
+        "category":    payload.category,
+        "notes":       payload.notes,
+        "reviewer_id": payload.reviewer_id,
+    }
+
+    # Resolve in DB now (the lg_engine fire-and-forget will also call this — idempotent)
+    await sqlite_store.resolve_escalation(escalation_id, decision, resolved_by=payload.reviewer_id)
+
+    # Audit
+    audit_logger.log(
+        EventType.HITL_APPROVED,
+        f"escalation:{escalation_id}",
+        run_id,
+        payload={
+            "escalation_id": escalation_id,
+            "category": payload.category,
+            "reviewer": payload.reviewer_id,
+            "notes": payload.notes,
+            "agent": esc.get("agent_name", ""),
+        },
+    )
+
+    # Resume LangGraph — runs in background so the HTTP response returns immediately
+    if run and _lg.is_available():
+        wf = _wf_store.get(run.workflow_id)
+        if wf:
+            background_tasks.add_task(_resume_lg_run, run, decision)
+
+    await broadcast({
+        "type":           "escalation_resolved",
+        "escalation_id":  escalation_id,
+        "run_id":         run_id,
+        "category":       payload.category,
+        "reviewer_id":    payload.reviewer_id,
+    })
+
+    return {"status": "resumed", "run_id": run_id, "category": payload.category}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

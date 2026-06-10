@@ -318,9 +318,109 @@ def _seed_demo() -> None:
     _store[wf.workflow_id] = wf
 
 
+def _seed_escalation_demo() -> None:
+    """
+    Agent escalation demo workflow.
+
+    Flow
+    ----
+    Trigger (ambiguous ticket)
+      → openai-ambiguous-classifier
+          ↳ confident: issue_type, severity, summary  (no pause)
+          ↳ uncertain: escalate=true  →  LangGraph interrupt() pauses here
+                       human reviews at /escalation
+                       human assigns category → resume → agent re-runs
+      → claude-escalation-responder   (drafts response using final classification)
+      → Event (ticket.escalation.processed)
+
+    The key demo point for engineers
+    ---------------------------------
+    The pause happens INSIDE the agent node — not between nodes.
+    LangGraph checkpoints the full workflow state (via Postgres on Railway).
+    The agent session (conversation history, partial output) is preserved in
+    the agent_escalations DB table.
+    On resume, the SAME agent re-runs with the human's decision injected into
+    the execution context via _human_resolution, _human_category, _human_notes.
+    The second run produces a confident output; the workflow continues normally.
+    """
+    wf = WorkflowDefinition(
+        workflow_id="wf-escalation-demo-001",
+        name="Agent Escalation: Human-in-the-Loop Classification",
+        description=(
+            "Engineers demo: OpenAI classifier escalates on ambiguous ticket → "
+            "human assigns category → agent re-runs with human input → Claude drafts response. "
+            "Demonstrates agent identity preservation, session reconstruction, and LangGraph checkpointing."
+        ),
+        version="1.0.0",
+        nodes=[
+            WFNode(
+                node_id="es1", node_type="trigger",
+                name="Ambiguous ticket received",
+                x=15, y=165,
+                detail="POST /webhook/ticket",
+                config={
+                    "Method": "POST",
+                    "Path": "/webhook/support",
+                    # Ambiguous ticket: billing + technical + access — genuinely hard to classify
+                    "Sample Data": (
+                        '{"ticket_id": "TKT-AMBIGUOUS-001", '
+                        '"ticket_text": "I was charged $299 on my card but the invoice shows $199. '
+                        "My account now shows 'Premium' status but I'm getting permission denied "
+                        "on every advanced feature. Also the mobile app crashes immediately after "
+                        "yesterday's update. I have a board presentation in 2 hours and I need "
+                        'this working NOW.", '
+                        '"customer_id": "CUST-4471", '
+                        '"customer_tier": "enterprise", '
+                        '"channel": "phone", '
+                        '"submitted_at": "2026-06-09T09:00:00Z"}'
+                    ),
+                },
+            ),
+            WFNode(
+                node_id="es2", node_type="agent",
+                name="Classify Ticket (OpenAI — may escalate)",
+                x=240, y=165,
+                detail="openai-ambiguous-classifier · escalation-aware",
+                config={
+                    "Agent ID": "openai-ambiguous-classifier",
+                    "Output": "issue_type, severity, confidence, affected_area, summary, key_details",
+                },
+            ),
+            WFNode(
+                node_id="es3", node_type="agent",
+                name="Draft Response (Claude)",
+                x=475, y=165,
+                detail="claude-escalation-responder · post-escalation",
+                config={
+                    "Agent ID": "claude-escalation-responder",
+                    "Output": "response_draft, priority_level, assign_to, sla_hours, escalation_note",
+                },
+            ),
+            WFNode(
+                node_id="es4", node_type="event",
+                name="Ticket escalation processed",
+                x=710, y=165,
+                detail="ticket.escalation.processed · internal",
+                config={
+                    "Topic":  "support.ticket.escalation.processed",
+                    "Schema": "EscalationProcessedEvent v1",
+                    "Broker": "internal",
+                },
+            ),
+        ],
+        edges=[
+            WFEdge(edge_id="ese1", from_node="es1", to_node="es2"),
+            WFEdge(edge_id="ese2", from_node="es2", to_node="es3"),
+            WFEdge(edge_id="ese3", from_node="es3", to_node="es4"),
+        ],
+    )
+    _store[wf.workflow_id] = wf
+
+
 _seed()
 _seed_multiagent()
 _seed_demo()
+_seed_escalation_demo()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentForge — Agent Escalations</title>
+  <style>
+    /* ── Design tokens ── */
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #30363d;
+      --text:     #e6edf3;
+      --muted:    #8b949e;
+      --accent:   #58a6ff;
+      --green:    #3fb950;
+      --yellow:   #d29922;
+      --red:      #f85149;
+      --purple:   #bc8cff;
+      --orange:   #ffa657;
+      --radius:   8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar nav ── */
+    .sidebar {
+      width: 220px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .sidebar-brand {
+      padding: 20px 16px 16px;
+      font-weight: 700;
+      font-size: 15px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sidebar-brand span { font-size: 20px; }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      cursor: pointer;
+      color: var(--muted);
+      text-decoration: none;
+      transition: all .15s;
+      border-left: 3px solid transparent;
+    }
+    .nav-item:hover, .nav-item.active {
+      color: var(--text);
+      background: rgba(88,166,255,.08);
+      border-left-color: var(--accent);
+    }
+    .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+    .nav-badge {
+      margin-left: auto;
+      background: var(--red);
+      color: #fff;
+      border-radius: 99px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    /* ── Main area ── */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .topbar {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .topbar h1 { font-size: 18px; font-weight: 600; }
+    .topbar-sub { color: var(--muted); font-size: 13px; margin-left: 4px; }
+    .refresh-btn {
+      margin-left: auto;
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Two-column layout ── */
+    .content { display: flex; flex: 1; overflow: hidden; }
+    .list-col {
+      width: 340px;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+    .detail-col { flex: 1; overflow-y: auto; padding: 24px; }
+
+    /* ── Escalation list ── */
+    .list-header {
+      padding: 12px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+    }
+    .esc-card {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .12s;
+    }
+    .esc-card:hover { background: rgba(88,166,255,.05); }
+    .esc-card.selected { background: rgba(88,166,255,.1); border-left: 3px solid var(--accent); }
+    .esc-card-title {
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .esc-card-sub { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .confidence-bar {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .confidence-fill { height: 100%; border-radius: 2px; }
+    .badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .badge-pending  { background: rgba(210,153,34,.2);  color: var(--yellow); }
+    .badge-resolved { background: rgba(63,185,80,.2);   color: var(--green);  }
+    .badge-low    { color: var(--yellow); }
+    .badge-med    { color: var(--orange); }
+    .badge-crit   { color: var(--red);    }
+
+    .empty-state {
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+
+    /* ── Detail panel ── */
+    .detail-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--muted);
+      gap: 12px;
+    }
+    .detail-placeholder .icon { font-size: 48px; }
+
+    .section { margin-bottom: 24px; }
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .kv-grid { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; }
+    .kv-label { color: var(--muted); font-size: 12px; }
+    .kv-value { font-size: 13px; }
+
+    /* ── Conversation replay ── */
+    .convo { display: flex; flex-direction: column; gap: 10px; }
+    .msg {
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .msg-system  { background: rgba(188,140,255,.08); border: 1px solid rgba(188,140,255,.2); }
+    .msg-user    { background: rgba(88,166,255,.08);  border: 1px solid rgba(88,166,255,.2); }
+    .msg-assistant { background: rgba(255,166,87,.08); border: 1px solid rgba(255,166,87,.2); }
+    .msg-role {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 6px;
+      opacity: .7;
+    }
+    .msg pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    /* ── Candidate chips ── */
+    .candidates { display: flex; gap: 8px; flex-wrap: wrap; }
+    .candidate-chip {
+      padding: 6px 12px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all .15s;
+      text-transform: capitalize;
+    }
+    .candidate-chip:hover, .candidate-chip.selected {
+      border-color: var(--accent);
+      background: rgba(88,166,255,.15);
+      color: var(--accent);
+    }
+
+    /* ── Resolve form ── */
+    .resolve-form { display: flex; flex-direction: column; gap: 14px; }
+    .form-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+    .form-input, .form-textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      transition: border-color .15s;
+    }
+    .form-input:focus, .form-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .form-textarea { height: 80px; resize: vertical; }
+    .resolve-btn {
+      padding: 10px 20px;
+      background: var(--green);
+      color: #000;
+      font-weight: 700;
+      font-size: 14px;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: opacity .15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .resolve-btn:hover { opacity: .88; }
+    .resolve-btn:disabled { opacity: .4; cursor: default; }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 9999;
+      animation: slideIn .3s ease;
+    }
+    .toast-success { background: var(--green); color: #000; }
+    .toast-error   { background: var(--red);   color: #fff; }
+    @keyframes slideIn {
+      from { transform: translateY(20px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+
+    .spinner { animation: spin 1s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Context snapshot ── */
+    .context-block {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 300px;
+      overflow-y: auto;
+      color: var(--orange);
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Sidebar ── -->
+<nav class="sidebar">
+  <div class="sidebar-brand"><span>⚡</span>AgentForge</div>
+  <a class="nav-item" href="/"><span class="nav-icon">🏠</span>Home</a>
+  <a class="nav-item" href="/workflow"><span class="nav-icon">🔀</span>Workflows</a>
+  <a class="nav-item" href="/orchestration"><span class="nav-icon">🎯</span>Orchestration</a>
+  <a class="nav-item active" href="/escalation"><span class="nav-icon">🚨</span>Escalations<span class="nav-badge" id="pending-count" style="display:none">0</span></a>
+</nav>
+
+<!-- ── Main ── -->
+<div class="main">
+  <div class="topbar">
+    <h1>🚨 Agent Escalations</h1>
+    <span class="topbar-sub">— human-in-the-loop review queue</span>
+    <button class="refresh-btn" onclick="loadEscalations()">↻ Refresh</button>
+  </div>
+
+  <div class="content">
+    <!-- Escalation list -->
+    <div class="list-col">
+      <div class="list-header">Pending escalations</div>
+      <div id="esc-list">
+        <div class="empty-state">
+          <div class="icon spinner">⌛</div>
+          <div>Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detail panel -->
+    <div class="detail-col" id="detail-col">
+      <div class="detail-placeholder">
+        <div class="icon">🔍</div>
+        <div>Select an escalation to review</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ─────────────────── State ─────────────────── */
+let _escalations = [];
+let _selected    = null;
+
+/* ─────────────────── API helpers ─────────────────── */
+async function apiFetch(url, opts = {}) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+  return r.json();
+}
+
+/* ─────────────────── Load list ─────────────────── */
+async function loadEscalations() {
+  try {
+    _escalations = await apiFetch('/api/escalations');
+    renderList();
+    const badge = document.getElementById('pending-count');
+    if (_escalations.length > 0) {
+      badge.textContent = _escalations.length;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (e) {
+    document.getElementById('esc-list').innerHTML =
+      `<div class="empty-state"><div class="icon">⚠️</div><div>Error: ${e.message}</div></div>`;
+  }
+}
+
+function confidenceColor(conf) {
+  const c = parseFloat(conf) || 0;
+  if (c < 0.4) return '#f85149';
+  if (c < 0.6) return '#ffa657';
+  return '#d29922';
+}
+
+function renderList() {
+  const el = document.getElementById('esc-list');
+  if (!_escalations.length) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">✅</div><div>No pending escalations</div><div style="font-size:12px;margin-top:6px;color:var(--muted)">All agents are operating autonomously</div></div>`;
+    return;
+  }
+  el.innerHTML = _escalations.map(e => {
+    const conf = parseFloat(e.confidence) || 0;
+    const pct  = Math.round(conf * 100);
+    const candidates = tryParse(e.candidates, []);
+    const age  = timeAgo(e.created_at);
+    const sel  = _selected === e.escalation_id ? 'selected' : '';
+    return `
+      <div class="esc-card ${sel}" onclick="selectEscalation('${e.escalation_id}')">
+        <div class="esc-card-title">
+          🤖 ${e.agent_name || e.agent_id}
+          <span class="badge badge-pending">Pending</span>
+        </div>
+        <div class="esc-card-sub">Run: ${e.run_id} &nbsp;·&nbsp; ${age}</div>
+        <div class="esc-card-sub" style="color:var(--text);margin-bottom:8px;font-size:12px">${e.reason || 'Classification confidence too low'}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div class="confidence-bar" style="flex:1">
+            <div class="confidence-fill" style="width:${pct}%;background:${confidenceColor(conf)}"></div>
+          </div>
+          <span style="font-size:11px;color:var(--muted);width:30px;text-align:right">${pct}%</span>
+        </div>
+        ${candidates.length ? `<div style="font-size:11px;color:var(--muted)">Candidates: ${candidates.join(', ')}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+/* ─────────────────── Select / detail ─────────────────── */
+async function selectEscalation(id) {
+  _selected = id;
+  renderList(); // re-render to show selection highlight
+
+  const detail = document.getElementById('detail-col');
+  detail.innerHTML = `<div class="detail-placeholder"><div class="icon spinner">⌛</div><div>Loading escalation…</div></div>`;
+
+  try {
+    const esc = await apiFetch(`/api/escalations/${id}`);
+    renderDetail(esc);
+  } catch (e) {
+    detail.innerHTML = `<div class="detail-placeholder"><div class="icon">⚠️</div><div>Error: ${e.message}</div></div>`;
+  }
+}
+
+function renderDetail(esc) {
+  const conf = parseFloat(esc.confidence) || 0;
+  const pct  = Math.round(conf * 100);
+  const candidates = tryParse(esc.candidates, []);
+  const ctx  = tryParse(esc.context_snapshot, {});
+  const conv = tryParse(esc.conversation_history, []);
+  const partial = tryParse(esc.partial_output, {});
+  const age  = timeAgo(esc.created_at);
+
+  document.getElementById('detail-col').innerHTML = `
+    <!-- Agent + run info -->
+    <div class="section">
+      <div class="section-title">Escalation Details</div>
+      <div class="card">
+        <div class="kv-grid">
+          <span class="kv-label">Escalation ID</span>
+          <span class="kv-value" style="font-family:monospace;font-size:12px">${esc.escalation_id}</span>
+          <span class="kv-label">Agent</span>
+          <span class="kv-value">🤖 ${esc.agent_name || esc.agent_id}</span>
+          <span class="kv-label">Run ID</span>
+          <span class="kv-value" style="font-family:monospace;font-size:12px">${esc.run_id}</span>
+          <span class="kv-label">Workflow</span>
+          <span class="kv-value">${esc.workflow_id || '—'}</span>
+          <span class="kv-label">Raised</span>
+          <span class="kv-value">${age}</span>
+          <span class="kv-label">Reason</span>
+          <span class="kv-value">${esc.reason || '—'}</span>
+          <span class="kv-label">Confidence</span>
+          <span class="kv-value">
+            <span style="color:${confidenceColor(conf)};font-weight:700">${pct}%</span>
+            &nbsp; — below the 70% autonomous threshold
+          </span>
+          ${candidates.length ? `
+          <span class="kv-label">Top candidates</span>
+          <span class="kv-value">${candidates.map(c => `<span class="badge badge-pending" style="margin-right:4px;text-transform:capitalize">${c}</span>`).join('')}</span>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- Conversation replay -->
+    ${conv.length ? `
+    <div class="section">
+      <div class="section-title">Agent Session Replay (preserved checkpoint)</div>
+      <div class="convo">
+        ${conv.map(msg => `
+          <div class="msg msg-${msg.role}">
+            <div class="msg-role">${msg.role}</div>
+            <pre>${escHtml(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2))}</pre>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Partial output (what the LLM returned before escalating) -->
+    ${Object.keys(partial).length ? `
+    <div class="section">
+      <div class="section-title">Agent's Partial Output (before escalation)</div>
+      <div class="context-block">${escHtml(JSON.stringify(partial, null, 2))}</div>
+    </div>` : ''}
+
+    <!-- Execution context snapshot -->
+    ${Object.keys(ctx).length ? `
+    <div class="section">
+      <div class="section-title">Workflow Context Snapshot</div>
+      <div class="context-block">${escHtml(JSON.stringify(ctx, null, 2))}</div>
+    </div>` : ''}
+
+    <!-- Resolve form -->
+    <div class="section">
+      <div class="section-title">Human Resolution</div>
+      <div class="card">
+        <div class="resolve-form">
+          ${candidates.length ? `
+          <div>
+            <div class="form-label">Select category (agent's top candidates)</div>
+            <div class="candidates" id="candidates-${esc.escalation_id}">
+              ${candidates.map(c => `<div class="candidate-chip" onclick="pickCandidate('${esc.escalation_id}','${c}',this)">${c}</div>`).join('')}
+            </div>
+          </div>` : ''}
+
+          <div>
+            <div class="form-label">Category</div>
+            <input class="form-input" id="cat-${esc.escalation_id}" type="text"
+              placeholder="e.g. billing, technical, account…"
+              value="${candidates[0] || ''}" />
+          </div>
+
+          <div>
+            <div class="form-label">Notes for agent (optional)</div>
+            <textarea class="form-textarea" id="notes-${esc.escalation_id}"
+              placeholder="Any context you want to pass to the agent…"></textarea>
+          </div>
+
+          <div>
+            <div class="form-label">Your name / reviewer ID</div>
+            <input class="form-input" id="reviewer-${esc.escalation_id}" type="text"
+              placeholder="e.g. john.smith" value="human-reviewer" />
+          </div>
+
+          <button class="resolve-btn" id="btn-${esc.escalation_id}"
+            onclick="submitResolution('${esc.escalation_id}')">
+            ✅ Resolve &amp; Resume Workflow
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ─────────────────── Candidate chip click ─────────────────── */
+function pickCandidate(escId, category, el) {
+  // deselect all
+  document.querySelectorAll(`#candidates-${escId} .candidate-chip`).forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  const inp = document.getElementById(`cat-${escId}`);
+  if (inp) inp.value = category;
+}
+
+/* ─────────────────── Submit resolution ─────────────────── */
+async function submitResolution(escId) {
+  const cat      = (document.getElementById(`cat-${escId}`)      || {}).value?.trim();
+  const notes    = (document.getElementById(`notes-${escId}`)    || {}).value?.trim() || '';
+  const reviewer = (document.getElementById(`reviewer-${escId}`) || {}).value?.trim() || 'human-reviewer';
+
+  if (!cat) { showToast('Please enter a category', 'error'); return; }
+
+  const btn = document.getElementById(`btn-${escId}`);
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner">⌛</span> Resolving…';
+
+  try {
+    const result = await apiFetch(`/api/escalations/${escId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: cat, notes, reviewer_id: reviewer }),
+    });
+    showToast(`✅ Resolved → workflow resuming (run: ${result.run_id})`, 'success');
+    // Remove from list and clear detail
+    _escalations = _escalations.filter(e => e.escalation_id !== escId);
+    _selected = null;
+    renderList();
+    document.getElementById('detail-col').innerHTML = `
+      <div class="detail-placeholder">
+        <div class="icon">✅</div>
+        <div style="color:var(--green);font-weight:600">Escalation resolved!</div>
+        <div style="color:var(--muted);font-size:13px;margin-top:4px">
+          Category: <strong style="color:var(--text)">${cat}</strong>
+          &nbsp;·&nbsp; Reviewer: ${reviewer}
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin-top:8px">
+          The workflow is resuming with the human-assigned category.
+          Check <a href="/orchestration" style="color:var(--accent)">Orchestration</a> for live status.
+        </div>
+      </div>`;
+    const badge = document.getElementById('pending-count');
+    if (_escalations.length > 0) { badge.textContent = _escalations.length; badge.style.display = ''; }
+    else badge.style.display = 'none';
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = '✅ Resolve &amp; Resume Workflow';
+    showToast(`Error: ${e.message}`, 'error');
+  }
+}
+
+/* ─────────────────── Helpers ─────────────────── */
+function tryParse(val, fallback) {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch { return fallback; }
+}
+
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function timeAgo(ts) {
+  if (!ts) return '—';
+  const secs = Math.floor(Date.now() / 1000 - parseFloat(ts));
+  if (secs < 60)   return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  return `${Math.floor(secs/3600)}h ago`;
+}
+
+function showToast(msg, type = 'success') {
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+/* ─────────────────── WebSocket for live updates ─────────────────── */
+function connectWS() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'wf_step' && msg.status === 'waiting_agent_escalation') {
+      // New escalation arrived — refresh list and show a toast
+      loadEscalations();
+      showToast(`🚨 New escalation from agent — run ${msg.run_id}`, 'success');
+    }
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+}
+
+/* ─────────────────── Init ─────────────────── */
+loadEscalations();
+connectWS();
+// Auto-refresh every 15s
+setInterval(loadEscalations, 15000);
+</script>
+</body>
+</html>

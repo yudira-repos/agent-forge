@@ -905,6 +905,7 @@ function AuthenticatedApp({user, onLogout}) {
     {id:'audit', label:'Audit Trail', icon:Icon.audit},
     {id:'__workflow', label:'Workflows', icon:Icon.agents},
     {id:'__orchestration', label:'Orchestration ⚡', icon:Icon.grid},
+    {id:'__escalation', label:'Escalations 🚨', icon:Icon.hitl},
   ];
 
   return (
@@ -918,7 +919,7 @@ function AuthenticatedApp({user, onLogout}) {
           {pages.map(p=>(
             <div key={p.id}
               className={`nav-item ${page===p.id?'active':''}`}
-              onClick={()=>p.id==='__workflow'?window.location.href='/workflow':p.id==='__orchestration'?window.location.href='/orchestration':setPage(p.id)}>
+              onClick={()=>p.id==='__workflow'?window.location.href='/workflow':p.id==='__orchestration'?window.location.href='/orchestration':p.id==='__escalation'?window.location.href='/escalation':setPage(p.id)}>
               {p.icon} {p.label}
               {p.badge && <span className="nav-badge">{p.badge}</span>}
             </div>
