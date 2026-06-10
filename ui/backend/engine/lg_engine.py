@@ -385,6 +385,20 @@ def is_available() -> bool:
     return _LG_AVAILABLE
 
 
+def _snapshot_to_state(graph: Any, config: dict) -> dict[str, Any]:
+    """
+    After a GraphInterrupt, retrieve the persisted state from the checkpointer
+    and return it as a plain dict so callers can inspect interrupt payloads.
+    """
+    try:
+        snapshot = graph.get_state(config)
+        if snapshot:
+            return dict(snapshot.values) if snapshot.values else {}
+    except Exception as exc:
+        logger.debug("_snapshot_to_state: get_state failed: %s", exc)
+    return {}
+
+
 async def run_workflow(
     run_id: str,
     workflow: Any,
@@ -396,6 +410,11 @@ async def run_workflow(
     Returns the LangGraph state dict.  If the graph paused at a HITL node,
     the returned state contains ``hitl_request_id`` and the run should be
     marked ``waiting_hitl``; otherwise the run is complete.
+
+    In some LangGraph versions ``interrupt()`` raises ``GraphInterrupt`` out of
+    ``ainvoke()`` rather than returning normally.  We catch that here and read
+    the persisted state from the checkpointer — the interrupt payload is then
+    visible via ``get_interrupt_info()``.
     """
     if not _LG_AVAILABLE:
         raise RuntimeError("langgraph is not installed")
@@ -415,7 +434,19 @@ async def run_workflow(
         "hitl_reason":     None,
     }
     config = {"configurable": {"thread_id": run_id}}
-    return await graph.ainvoke(initial, config=config)
+    try:
+        return await graph.ainvoke(initial, config=config)
+    except Exception as exc:
+        # LangGraph ≥ 0.3 raises GraphInterrupt out of ainvoke() when interrupt()
+        # is called inside a node.  Treat this as a clean pause — not an error.
+        exc_type = type(exc).__name__
+        if "interrupt" in exc_type.lower() or "graphinterrupt" in exc_type.lower():
+            logger.info(
+                "run_workflow(%s): GraphInterrupt raised by ainvoke() — run is paused",
+                run_id,
+            )
+            return _snapshot_to_state(graph, config)
+        raise
 
 
 async def resume_workflow(
@@ -435,7 +466,17 @@ async def resume_workflow(
 
     graph = _get_graph(workflow)
     config = {"configurable": {"thread_id": run_id}}
-    return await graph.ainvoke(Command(resume=decision), config=config)
+    try:
+        return await graph.ainvoke(Command(resume=decision), config=config)
+    except Exception as exc:
+        exc_type = type(exc).__name__
+        if "interrupt" in exc_type.lower() or "graphinterrupt" in exc_type.lower():
+            logger.info(
+                "resume_workflow(%s): GraphInterrupt — graph paused again at a new node",
+                run_id,
+            )
+            return _snapshot_to_state(graph, config)
+        raise
 
 
 def get_interrupt_info(run_id: str, workflow: Any) -> dict[str, Any] | None:

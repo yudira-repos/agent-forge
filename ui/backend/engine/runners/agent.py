@@ -321,9 +321,31 @@ async def run_agent(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResult
             tokens_out = len(json.dumps(output)) // 4
 
     except Exception as exc:
-        error_msg = str(exc)
-        logger.error("Agent '%s' failed: %s", node.name, exc, exc_info=True)
-        output = {"_error": error_msg, "_agent": node.name}
+        error_str = str(exc)
+        # ── API quota / rate-limit errors → auto-escalate to human ───────────
+        # If the LLM backend is unavailable, routing to a human is the correct
+        # production behavior rather than silently failing the workflow.
+        _is_api_err = any(k in error_str.lower() for k in [
+            "quota", "insufficient_quota", "rate_limit", "429",
+            "billing", "exceeded your current quota",
+        ])
+        if _is_api_err and not ctx.get("_human_resolution"):
+            logger.warning(
+                "Agent '%s' LLM backend unavailable (%s) — auto-escalating to human",
+                node.name, error_str[:120],
+            )
+            output = {
+                "escalate":           True,
+                "reason":             f"LLM backend unavailable ({use_backend}): {error_str[:200]}",
+                "confidence":         0.0,
+                "candidates":         [],
+                "human_input_needed": "API quota exceeded — please classify manually and resume",
+            }
+            error_msg = None   # not a hard failure — we're escalating
+        else:
+            error_msg = error_str
+            logger.error("Agent '%s' failed: %s", node.name, exc, exc_info=True)
+            output = {"_error": error_msg, "_agent": node.name}
 
     # ── Agent-level escalation detection ──────────────────────────────────────
     # An agent can signal that it needs human input by including "escalate": true

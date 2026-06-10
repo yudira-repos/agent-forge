@@ -1208,13 +1208,24 @@ async def _run_workflow_lg(run_id: str, input_data: dict[str, Any] | None = None
             run_id, wf, dict(input_data or run.input_data or {})
         )
     except Exception as exc:
-        run.status = "failed"
-        run.error = str(exc)
-        run.completed_at = time.time()
-        await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
-        await broadcast({"type": "wf_run_done", "run_id": run_id,
-                         "status": run.status, "workflow_name": run.workflow_name})
-        return
+        # Safety net: GraphInterrupt should be caught inside lg_engine.run_workflow(),
+        # but in some LangGraph builds it can still escape.  Treat it as a clean pause.
+        exc_type = type(exc).__name__
+        if "interrupt" in exc_type.lower() or "graphinterrupt" in exc_type.lower():
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "_run_workflow_lg(%s): GraphInterrupt escaped lg_engine — treating as pause",
+                run_id,
+            )
+            lg_state = {}  # interrupt_info will be read from the checkpointer below
+        else:
+            run.status = "failed"
+            run.error = str(exc)
+            run.completed_at = time.time()
+            await sqlite_store.upsert_run(run_id, run.workflow_id, run.model_dump())
+            await broadcast({"type": "wf_run_done", "run_id": run_id,
+                             "status": run.status, "workflow_name": run.workflow_name})
+            return
 
     # Check if the graph paused at any interrupt (HITL or agent escalation)
     interrupt_info = _lg.get_interrupt_info(run_id, wf)
