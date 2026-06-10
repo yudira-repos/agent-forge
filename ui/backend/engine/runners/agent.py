@@ -305,6 +305,48 @@ async def run_agent(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResult
         node.name, agent_id, adapter or "auto", model, use_backend,
     )
 
+    # ── Governance check ──────────────────────────────────────────────────────
+    # Evaluate the SOC2 policy engine before every LLM invocation.
+    # DENY → hard failure.  REQUIRE_HITL → convert to escalation so a human
+    # reviews the action before the agent calls the LLM.
+    try:
+        from ui.backend.governance_singleton import gov_engine
+        from agentforge.governance import PolicyContext
+        _resource = cfg.get("Resource", f"agent/{agent_id}")
+        _action   = cfg.get("Action",   "invoke")
+        _gov_ctx  = PolicyContext(
+            agent_id=agent_id,
+            agent_roles=manifest.required_roles if manifest else [],
+            action=_action,
+            resource=_resource,
+            environment=os.environ.get("ENVIRONMENT", "production"),
+            metadata=dict(ctx.snapshot()),
+        )
+        _gov_decision = gov_engine.evaluate(_gov_ctx)
+        if _gov_decision.is_denied:
+            logger.warning("Governance DENIED agent '%s': %s", agent_id, _gov_decision.reason)
+            return NodeResult(error=f"Governance policy denied: {_gov_decision.reason}")
+        if _gov_decision.requires_hitl:
+            # Surface as an agent escalation so the human reviews before the LLM runs.
+            logger.warning("Governance REQUIRE_HITL for agent '%s': %s", agent_id, _gov_decision.reason)
+            return NodeResult(output={
+                "escalate":           True,
+                "reason":             f"Governance policy requires human review: {_gov_decision.reason}",
+                "confidence":         0.0,
+                "candidates":         [],
+                "human_input_needed": _gov_decision.reason,
+            })
+        if _gov_decision.is_allowed and hasattr(_gov_decision, "effect"):
+            # AUDIT effect — log but continue
+            from agentforge.governance import PolicyEffect
+            if str(getattr(_gov_decision, "effect", "")) == PolicyEffect.AUDIT.value:
+                logger.info("Governance AUDIT: agent '%s' action '%s' on '%s'",
+                            agent_id, _action, _resource)
+    except ImportError:
+        pass  # agentforge not installed
+    except Exception as gov_exc:
+        logger.warning("Governance check failed (non-fatal, allowing): %s", gov_exc)
+
     t0 = time.perf_counter()
     error_msg: str | None = None
     tokens_in  = 0

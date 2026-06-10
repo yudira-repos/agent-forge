@@ -123,48 +123,135 @@ async def run_transform(node: Any, ctx: ExecutionContext, run_id: str) -> NodeRe
 
 # ── Event ─────────────────────────────────────────────────────────────────────
 
+async def _publish_kafka(topic: str, payload: dict[str, Any]) -> str:
+    """Publish to Kafka if aiokafka is installed and KAFKA_BOOTSTRAP_SERVERS is set."""
+    import os
+    servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+    if not servers:
+        raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS not set")
+    from aiokafka import AIOKafkaProducer  # type: ignore
+    producer = AIOKafkaProducer(bootstrap_servers=servers)
+    await producer.start()
+    try:
+        await producer.send_and_wait(topic, json.dumps(payload).encode())
+    finally:
+        await producer.stop()
+    return f"kafka://{servers}/{topic}"
+
+
+async def _publish_webhook(url: str, payload: dict[str, Any]) -> str:
+    """POST the event payload to an HTTP webhook (EventBridge, Pub/Sub push, custom)."""
+    import httpx
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+    return url
+
+
+async def _publish_eventbridge(bus: str, source: str, detail_type: str, payload: dict[str, Any]) -> str:
+    """Put an event to AWS EventBridge if boto3 is available."""
+    import boto3  # type: ignore
+    client = boto3.client("events")
+    client.put_events(Entries=[{
+        "Source": source,
+        "DetailType": detail_type,
+        "Detail": json.dumps(payload),
+        "EventBusName": bus,
+    }])
+    return f"eventbridge://{bus}/{detail_type}"
+
+
 async def run_event(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResult:
     """
-    Publishes a domain event.
+    Publishes a domain event to a real broker.
 
-    Production integration points (pick one per deployment):
-      - Kafka:        ``await producer.send(topic, json.dumps(payload).encode())``
-      - AWS EventBridge: ``await eb.put_events(Entries=[{...}])``
-      - Google Pub/Sub:  ``await topic.publish(json.dumps(payload).encode())``
-      - Azure Service Bus: ``await sender.send_messages(ServiceBusMessage(...))``
+    Broker selection (first match wins):
+      1. ``KAFKA_BOOTSTRAP_SERVERS`` env var → Kafka via aiokafka
+      2. ``EVENT_WEBHOOK_URL`` env var → HTTP POST (works with EventBridge,
+         Pub/Sub push subscriptions, Zapier, custom webhooks)
+      3. ``EVENTBRIDGE_BUS_NAME`` env var → AWS EventBridge via boto3
+      4. Fallback → structured JSON log (honest: no external side-effect)
 
-    For now, the event is logged at INFO level and the context is annotated.
+    Node config keys:
+      - ``Topic``  — Kafka topic name or EventBridge detail-type  (default: "agentforge.events")
+      - ``Schema`` — event schema identifier for consumers
+      - ``Broker`` — informational label (e.g. "kafka", "eventbridge")
     """
-    cfg = node.config
-    topic = cfg.get("Topic", cfg.get("topic", "agentforge.events"))
-    schema = cfg.get("Schema", "")
-    broker = cfg.get("Broker", "internal")
+    import os
 
+    cfg = node.config
+    topic       = cfg.get("Topic", cfg.get("topic", "agentforge.events"))
+    schema      = cfg.get("Schema", "")
+    broker_hint = cfg.get("Broker", "")
+
+    published_at = time.time()
     payload = {
-        "topic": topic,
-        "schema": schema,
-        "run_id": run_id,
+        "topic":       topic,
+        "schema":      schema,
+        "run_id":      run_id,
         "workflow_id": ctx.workflow_id,
-        "event_data": ctx.snapshot(),
-        "published_at": time.time(),
+        "event_data":  {k: v for k, v in ctx.snapshot().items() if not k.startswith("_")},
+        "published_at": published_at,
     }
 
-    logger.info(
-        "Event '%s': publishing to topic '%s' on broker '%s'",
-        node.name, topic, broker,
-    )
+    broker_used = "log"
+    delivery_url = ""
 
-    # TODO: replace with real broker client
-    # await kafka_producer.send(topic, value=json.dumps(payload).encode())
+    # ── 1. Kafka ──────────────────────────────────────────────────────────────
+    if os.environ.get("KAFKA_BOOTSTRAP_SERVERS"):
+        try:
+            delivery_url = await _publish_kafka(topic, payload)
+            broker_used = "kafka"
+            logger.info("Event '%s': published to Kafka topic '%s'", node.name, topic)
+        except Exception as exc:
+            logger.warning("Event '%s': Kafka publish failed (%s) — falling through", node.name, exc)
 
-    ctx.set("last_event", {"topic": topic, "published_at": payload["published_at"]})
+    # ── 2. HTTP Webhook ───────────────────────────────────────────────────────
+    if broker_used == "log" and os.environ.get("EVENT_WEBHOOK_URL"):
+        try:
+            delivery_url = await _publish_webhook(os.environ["EVENT_WEBHOOK_URL"], payload)
+            broker_used = "webhook"
+            logger.info("Event '%s': POSTed to webhook %s", node.name, delivery_url)
+        except Exception as exc:
+            logger.warning("Event '%s': webhook POST failed (%s) — falling through", node.name, exc)
+
+    # ── 3. AWS EventBridge ────────────────────────────────────────────────────
+    if broker_used == "log" and os.environ.get("EVENTBRIDGE_BUS_NAME"):
+        try:
+            delivery_url = await _publish_eventbridge(
+                bus=os.environ["EVENTBRIDGE_BUS_NAME"],
+                source=f"agentforge.{ctx.workflow_id}",
+                detail_type=topic,
+                payload=payload,
+            )
+            broker_used = "eventbridge"
+            logger.info("Event '%s': sent to EventBridge bus '%s'", node.name, os.environ["EVENTBRIDGE_BUS_NAME"])
+        except Exception as exc:
+            logger.warning("Event '%s': EventBridge publish failed (%s) — falling through", node.name, exc)
+
+    # ── 4. Structured log fallback ────────────────────────────────────────────
+    if broker_used == "log":
+        logger.info(
+            "Event '%s': no broker configured — logging event. "
+            "Set KAFKA_BOOTSTRAP_SERVERS, EVENT_WEBHOOK_URL, or EVENTBRIDGE_BUS_NAME "
+            "to publish to a real broker. payload=%s",
+            node.name, json.dumps(payload, default=str)[:500],
+        )
+
+    ctx.set("last_event", {"topic": topic, "broker": broker_used, "published_at": published_at})
 
     return NodeResult(output={
-        "event_published": True,
-        "topic": topic,
-        "broker": broker,
-        "schema": schema,
-        "published_at": payload["published_at"],
+        "event_published": broker_used != "log",
+        "broker":          broker_used,
+        "topic":           topic,
+        "schema":          schema,
+        "delivery_url":    delivery_url,
+        "published_at":    published_at,
+        "note": (
+            "No broker configured — set KAFKA_BOOTSTRAP_SERVERS, "
+            "EVENT_WEBHOOK_URL, or EVENTBRIDGE_BUS_NAME to enable real publishing."
+            if broker_used == "log" else ""
+        ),
     })
 
 
@@ -172,49 +259,111 @@ async def run_event(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResult
 
 async def run_loop(node: Any, ctx: ExecutionContext, run_id: str) -> NodeResult:
     """
-    Iterates over a collection in the context.
+    Iterates over a collection and applies a per-item transform expression.
 
-    Config::
+    Config keys::
 
-        {"Items": "ctx.items", "Variable": "item"}
+        Items     — expression that resolves to a list, e.g. "ctx.line_items"
+        Variable  — name exposed per-iteration, e.g. "item"  (default: "item")
+        Transform — optional expression applied to each item, e.g.
+                    "{'sku': item['sku'], 'total': item['qty'] * item['unit_price']}"
+        Reduce    — "sum" | "list" | "first"  (default: "list")
+                    How to combine per-item results into the output.
 
-    The DAG walker calls ``execute_node`` for each child node once; to get true
-    per-item execution the orchestrator needs to clone the context per iteration
-    and fan-out.  That is planned but not yet implemented.
+    Results are written to ctx as ``{loop_var}_results`` (list of per-item
+    outputs) and ``{loop_var}_count``.  The first item is also available as
+    ``{loop_var}`` for single-item access patterns.
 
-    For now the loop records the iteration plan in ctx so downstream nodes have
-    access to the collection.
+    Example::
+
+        {"Items": "ctx.items", "Variable": "item",
+         "Transform": "{'total': item['qty'] * item['unit_price']}"}
+
+        → ctx.item_results = [{"total": 500.0}, {"total": 200.0}]
+        → ctx.item_count   = 2
     """
     cfg = node.config
     items_expr = cfg.get("Items", cfg.get("items", "[]")).strip()
-    loop_var = cfg.get("Variable", cfg.get("variable", "item"))
+    loop_var   = cfg.get("Variable", cfg.get("variable", "item"))
+    xform_expr = cfg.get("Transform", cfg.get("transform", "")).strip()
+    reduce_op  = cfg.get("Reduce", "list").strip().lower()
 
+    # ── Resolve the collection ────────────────────────────────────────────────
     namespace: dict[str, Any] = {
         **_SAFE_BUILTINS,
         "ctx": ctx.as_namespace(),
         **ctx.data,
     }
-
     try:
         items = eval(  # noqa: S307
-            compile(items_expr, "<loop>", "eval"),
+            compile(items_expr, "<loop-items>", "eval"),
             {"__builtins__": {}},
             namespace,
         )
     except Exception:
-        # Fallback: treat expr as a bare ctx key name
         items = ctx.get(items_expr.lstrip("ctx."), [])
 
     if not isinstance(items, (list, tuple)):
         items = [items] if items else []
 
-    ctx.set(f"{loop_var}_count", len(items))
-    ctx.set(f"{loop_var}_items", list(items))
+    # ── Per-item processing ───────────────────────────────────────────────────
+    results: list[Any] = []
+    errors:  list[str] = []
+
+    for i, item in enumerate(items):
+        if xform_expr:
+            item_ns: dict[str, Any] = {
+                **_SAFE_BUILTINS,
+                "ctx":     ctx.as_namespace(),
+                loop_var:  item,
+                "item":    item,   # always available as "item" regardless of loop_var
+                "index":   i,
+                **ctx.data,
+            }
+            try:
+                result = eval(  # noqa: S307
+                    compile(xform_expr, f"<loop-transform[{i}]>", "eval"),
+                    {"__builtins__": {}},
+                    item_ns,
+                )
+                results.append(result)
+            except Exception as exc:
+                errors.append(f"[{i}] {exc}")
+                results.append(item)   # pass through unchanged on error
+        else:
+            results.append(item)
+
+    # ── Reduce ────────────────────────────────────────────────────────────────
+    if reduce_op == "sum":
+        try:
+            reduced: Any = sum(
+                v for v in results
+                if isinstance(v, (int, float))
+            )
+        except Exception:
+            reduced = results
+    elif reduce_op == "first":
+        reduced = results[0] if results else None
+    else:
+        reduced = results   # "list" (default)
+
+    # ── Write back to context ─────────────────────────────────────────────────
+    ctx.set(f"{loop_var}_results",  results)
+    ctx.set(f"{loop_var}_count",    len(items))
+    ctx.set(f"{loop_var}_reduced",  reduced)
+    if results:
+        ctx.set(loop_var, results[0])   # first item for easy downstream access
+
+    if errors:
+        logger.warning("Loop '%s': %d transform errors: %s", node.name, len(errors), errors[:3])
 
     return NodeResult(output={
-        "loop_variable": loop_var,
+        "loop_variable":   loop_var,
         "iteration_count": len(items),
-        "items_preview": list(items)[:5],
+        "results":         results,
+        "reduced":         reduced,
+        "errors":          errors,
+        "items_preview":   list(items)[:5],
     })
 
 

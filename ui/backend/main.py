@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,7 @@ from agentforge.aiam import AgentIdentity, RBACPolicy, Permission
 from agentforge.audit import AuditLogger, AuditQuery, AuditTrail, EventSeverity, EventType
 from agentforge.audit.logger import InMemoryAuditSink
 from ui.backend.notifications.slack import slack_notify
+from ui.backend.auth import CurrentUser, require_operator, require_supervisor
 from agentforge.governance import PolicyContext, SOC2Profile
 from agentforge.hitl import ApprovalDecision, ApprovalRequest, ApprovalStatus, EscalationPolicy, HITLOrchestrator
 from agentforge.registry import AgentCapability, AgentManifest, AgentRegistry, AgentStatus
@@ -92,7 +93,7 @@ registry = AgentRegistry()
 audit_sink = InMemoryAuditSink()
 audit_logger = AuditLogger(sinks=[audit_sink])
 audit_trail = AuditTrail(audit_sink)
-gov_engine = SOC2Profile.engine()
+from ui.backend.governance_singleton import gov_engine  # noqa: E402 — after sys.path setup
 hitl_orchestrator = HITLOrchestrator(
     escalation_policy=EscalationPolicy.standard(),
     notify=slack_notify,   # real Slack notifications
@@ -724,7 +725,10 @@ def _hitl_audit_ctx(request_id: str) -> tuple[str, str, str]:
 
 @app.post("/api/hitl/{request_id}/approve")
 async def approve_hitl(
-    request_id: str, payload: ApprovePayload, background_tasks: BackgroundTasks
+    request_id: str,
+    payload: ApprovePayload,
+    background_tasks: BackgroundTasks,
+    current_user: "CurrentUser" = Depends(require_supervisor),
 ) -> dict[str, Any]:
     # req may be None after a server restart — proceed regardless.
     req = hitl_orchestrator.get_request(request_id)
@@ -763,7 +767,10 @@ async def approve_hitl(
 
 @app.post("/api/hitl/{request_id}/reject")
 async def reject_hitl(
-    request_id: str, payload: RejectPayload, background_tasks: BackgroundTasks
+    request_id: str,
+    payload: RejectPayload,
+    background_tasks: BackgroundTasks,
+    current_user: "CurrentUser" = Depends(require_supervisor),
 ) -> dict[str, Any]:
     req = hitl_orchestrator.get_request(request_id)
     decision_dict = {"approved": False, "reviewer_id": payload.reviewer_id, "reason": payload.reason}
@@ -1590,6 +1597,7 @@ async def execute_workflow(
     workflow_id: str,
     background_tasks: BackgroundTasks,
     payload: ExecuteWorkflowPayload | None = None,
+    current_user: "CurrentUser" = Depends(require_operator),
 ) -> dict[str, Any]:
     if payload is None:
         payload = ExecuteWorkflowPayload()
@@ -1655,6 +1663,7 @@ async def resolve_escalation_endpoint(
     escalation_id: str,
     payload: EscalationResolutionPayload,
     background_tasks: BackgroundTasks,
+    current_user: "CurrentUser" = Depends(require_supervisor),
 ) -> dict[str, Any]:
     """
     Human resolves an agent escalation.
