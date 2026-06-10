@@ -336,17 +336,31 @@ let es;
 let lastData = {};
 
 function connect() {
+  // Close any existing connection before opening a new one so stale
+  // EventSource objects don't pile up and keep firing onerror.
+  if (es) { try { es.close(); } catch(e) {} }
+
   es = new EventSource('/api/orchestration/live');
+
   es.onopen = () => {
     document.getElementById('sse-dot').style.background = 'var(--green)';
     document.getElementById('sse-status').textContent = 'Live';
   };
+
   es.onerror = () => {
+    // Guard flag prevents multiple rapid error events stacking timers.
+    if (es._reconnecting) return;
+    es._reconnecting = true;
     document.getElementById('sse-dot').style.background = 'var(--red)';
     document.getElementById('sse-status').textContent = 'Reconnecting…';
-    setTimeout(connect, 5000);
+    try { es.close(); } catch(e) {}
+    setTimeout(connect, 4000);
   };
+
   es.onmessage = e => {
+    // Any successful message means we're live — clear error indicator.
+    document.getElementById('sse-dot').style.background = 'var(--green)';
+    document.getElementById('sse-status').textContent = 'Live';
     const d = JSON.parse(e.data);
     lastData = d;
     const ts = new Date(d.ts * 1000).toLocaleTimeString();

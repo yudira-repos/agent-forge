@@ -652,29 +652,57 @@ async def orchestration_live_sse() -> StreamingResponse:
             from ui.backend.observability.otel import get_agent_metrics, get_run_spans
             from ui.backend.db import sqlite_store
 
-            # ── Active runs ────────────────────────────────────────────────
+            # ── Active runs: in-memory first, fall back to DB ──────────────
             active_runs = []
-            for run in sorted(
+            mem_runs = sorted(
                 _workflow_runs.values(),
                 key=lambda r: r.started_at,
                 reverse=True,
-            )[:10]:
-                spans = get_run_spans(run.run_id)
-                active_runs.append({
-                    "run_id":        run.run_id,
-                    "workflow_id":   run.workflow_id,
-                    "workflow_name": run.workflow_name,
-                    "status":        run.status,
-                    "engine":        run.engine,
-                    "started_at":    run.started_at,
-                    "current_node":  run.current_node_id,
-                    "step_count":    len(run.steps),
-                    "span_count":    len(spans),
-                    "total_tokens":  sum(s["tokens_in"] + s["tokens_out"] for s in spans),
-                    "total_cost_usd": round(sum(s["cost_usd"] for s in spans), 6),
-                    "agents_used":   list({s["agent_id"] for s in spans}),
-                    "recent_spans":  spans[-5:],
-                })
+            )[:10]
+
+            if mem_runs:
+                # Runs exist in this server session — use them (fastest path)
+                for run in mem_runs:
+                    spans = get_run_spans(run.run_id)
+                    active_runs.append({
+                        "run_id":        run.run_id,
+                        "workflow_id":   run.workflow_id,
+                        "workflow_name": run.workflow_name,
+                        "status":        run.status,
+                        "engine":        run.engine,
+                        "started_at":    run.started_at,
+                        "current_node":  run.current_node_id,
+                        "step_count":    len(run.steps),
+                        "span_count":    len(spans),
+                        "total_tokens":  sum(s["tokens_in"] + s["tokens_out"] for s in spans),
+                        "total_cost_usd": round(sum(s["cost_usd"] for s in spans), 6),
+                        "agents_used":   list({s["agent_id"] for s in spans}),
+                        "recent_spans":  spans[-5:],
+                    })
+            else:
+                # Server restarted — load most recent runs from DB so timeline
+                # isn't blank after a redeploy.
+                try:
+                    db_runs = await sqlite_store.list_runs()
+                    for run_data in db_runs[:10]:
+                        db_spans = await sqlite_store.get_spans_for_run(run_data["run_id"])
+                        active_runs.append({
+                            "run_id":        run_data["run_id"],
+                            "workflow_id":   run_data.get("workflow_id", ""),
+                            "workflow_name": run_data.get("workflow_name", run_data.get("workflow_id", "")),
+                            "status":        run_data.get("status", "completed"),
+                            "engine":        run_data.get("engine", "custom"),
+                            "started_at":    run_data.get("started_at", 0),
+                            "current_node":  run_data.get("current_node_id"),
+                            "step_count":    run_data.get("step_count", 0),
+                            "span_count":    len(db_spans),
+                            "total_tokens":  sum(s.get("tokens_in", 0) + s.get("tokens_out", 0) for s in db_spans),
+                            "total_cost_usd": round(sum(s.get("cost_usd", 0) for s in db_spans), 6),
+                            "agents_used":   list({s["agent_id"] for s in db_spans if s.get("agent_id")}),
+                            "recent_spans":  db_spans[-5:],
+                        })
+                except Exception:
+                    pass  # DB unavailable — show empty timeline gracefully
 
             # ── Agent metrics: DB-merged so historical data is never lost ──
             try:
