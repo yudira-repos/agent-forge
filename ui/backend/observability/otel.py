@@ -73,9 +73,33 @@ try:
     if _otlp_endpoint:
         try:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-            _otlp_exporter = OTLPSpanExporter(endpoint=_otlp_endpoint)
+
+            # Explicitly parse OTEL_EXPORTER_OTLP_HEADERS — some SDK versions
+            # don't auto-read it when the exporter is given an explicit endpoint,
+            # causing silent 401s to Honeycomb that BatchSpanProcessor swallows.
+            # Format expected: "key1=value1,key2=value2"
+            _raw_headers = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+            _headers: dict[str, str] = {}
+            for _pair in _raw_headers.split(","):
+                _pair = _pair.strip()
+                if "=" in _pair:
+                    _k, _v = _pair.split("=", 1)
+                    _headers[_k.strip()] = _v.strip()
+
+            # Honeycomb requires the full /v1/traces path on the endpoint
+            _traces_endpoint = _otlp_endpoint.rstrip("/")
+            if not _traces_endpoint.endswith("/v1/traces"):
+                _traces_endpoint += "/v1/traces"
+
+            _otlp_exporter = OTLPSpanExporter(
+                endpoint=_traces_endpoint,
+                headers=_headers if _headers else None,
+            )
             _provider.add_span_processor(BatchSpanProcessor(_otlp_exporter))
-            logger.info("OTEL: OTLP exporter active → %s", _otlp_endpoint)
+            logger.info(
+                "OTEL: OTLP exporter active → %s  auth_headers=%s",
+                _traces_endpoint, list(_headers.keys()),
+            )
         except Exception as exc:
             logger.warning("OTEL: OTLP exporter failed to init (%s)", exc)
 
