@@ -6,7 +6,7 @@
 <title>AgentForge — Enterprise Console</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -195,8 +195,21 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel">
+<script>
+/* ── UI Activity Logger ────────────────────────────────────────────────── */
+function uiLog(action, details) {
+  try {
+    fetch('/api/ui-activity', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({screen:'console', action, details: details||{}, ts: Date.now()/1000}),
+    });
+  } catch(e) {}  // fire-and-forget, never block the UI
+}
+</script>
+<script>
 const { useState, useEffect, useCallback, useRef } = React;
+const html = htm.bind(React.createElement);
 const API = '/api';
 
 // ── RBAC permission helper ─────────────────────────────────────────────────
@@ -215,16 +228,14 @@ function can(user, action) {
 }
 
 function AccessDenied({role, required}) {
-  return (
-    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'60vh',gap:12}}>
-      <div style={{fontSize:40}}>🔒</div>
-      <div style={{fontSize:18,fontWeight:700,color:'var(--text)'}}>Access Restricted</div>
-      <div style={{fontSize:13,color:'var(--muted)',textAlign:'center',maxWidth:320}}>
-        Your role <span className="badge badge-gray">{role}</span> cannot access this section.
-        <br/>Required: <span className="badge badge-blue">{required}</span>
-      </div>
+  return html`<div style=${{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'60vh',gap:12}}>
+    <div style=${{fontSize:40}}>🔒</div>
+    <div style=${{fontSize:18,fontWeight:700,color:'var(--text)'}}>Access Restricted</div>
+    <div style=${{fontSize:13,color:'var(--muted)',textAlign:'center',maxWidth:320}}>
+      Your role <span className="badge badge-gray">${role}</span> cannot access this section.
+      <br/>Required: <span className="badge badge-blue">${required}</span>
     </div>
-  );
+  </div>`;
 }
 
 // ── Auth token storage ─────────────────────────────────────────────────────
@@ -252,11 +263,11 @@ function severityColor(s) {
 }
 function statusBadge(s) {
   const map = {active:'badge-green',inactive:'badge-gray',deprecated:'badge-red',maintenance:'badge-orange'};
-  return <span className={`badge ${map[s]||'badge-gray'}`}>{s}</span>;
+  return html`<span className=${`badge ${map[s]||'badge-gray'}`}>${s}</span>`;
 }
 function adapterBadge(a) {
   const map = {anthropic:'badge-purple',openai:'badge-green',langchain:'badge-blue',vertex:'badge-orange'};
-  return <span className={`badge ${map[a]||'badge-gray'}`}>{a}</span>;
+  return html`<span className=${`badge ${map[a]||'badge-gray'}`}>${a}</span>`;
 }
 async function api(path, opts={}) {
   const token = TokenStore.get();
@@ -270,19 +281,19 @@ async function api(path, opts={}) {
 // ── Toast ──────────────────────────────────────────────────────────────────
 function Toast({msg, type, onClose}) {
   useEffect(() => { const t=setTimeout(onClose,3000); return ()=>clearTimeout(t); }, []);
-  return <div className={`toast ${type}`}>{msg}</div>;
+  return html`<div className=${`toast ${type}`}>${msg}</div>`;
 }
 
 // ── Icons (inline SVG) ─────────────────────────────────────────────────────
 const Icon = {
-  grid: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
-  agents: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>,
-  hitl: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M9 12l2 2 4-4"/><path d="M21 12c0 5-3.9 9-9 9s-9-4-9-9 3.9-9 9-9 9 4 9 9z"/></svg>,
-  audit: <svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M9 12h6M9 16h6M9 8h6M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>,
-  check: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path d="M5 13l4 4L19 7"/></svg>,
-  x: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path d="M6 18L18 6M6 6l12 12"/></svg>,
-  refresh: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4 9a8 8 0 0114.2-2.8M20 15a8 8 0 01-14.2 2.8"/></svg>,
-  play: <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polygon points="5,3 19,12 5,21"/></svg>,
+  grid:    html`<svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`,
+  agents:  html`<svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>`,
+  hitl:    html`<svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 5-3.9 9-9 9s-9-4-9-9 3.9-9 9-9 9 4 9 9z"/></svg>`,
+  audit:   html`<svg className="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path d="M9 12h6M9 16h6M9 8h6M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>`,
+  check:   html`<svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path d="M5 13l4 4L19 7"/></svg>`,
+  x:       html`<svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path d="M6 18L18 6M6 6l12 12"/></svg>`,
+  refresh: html`<svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4 9a8 8 0 0114.2-2.8M20 15a8 8 0 01-14.2 2.8"/></svg>`,
+  play:    html`<svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><polygon points="5,3 19,12 5,21"/></svg>`,
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -291,102 +302,97 @@ function Dashboard({hitlCount, onNav}) {
   const load = useCallback(() => api('/dashboard').then(setData).catch(console.error), []);
   useEffect(() => { load(); const t=setInterval(load,10000); return ()=>clearInterval(t); }, []);
 
-  if (!data) return <div className="loading">Loading dashboard…</div>;
+  if (!data) return html`<div className="loading">Loading dashboard...</div>`;
   const {agents, hitl_queue_depth, audit, recent_events, recent_violations, agent_health} = data;
 
-  return (
-    <div>
-      <div className="page-header">
-        <div className="page-title">Overview</div>
-        <div className="page-sub">LifeOS Agent System · All agents healthy</div>
-      </div>
+  return html`<div>
+    <div className="page-header">
+      <div className="page-title">Overview</div>
+      <div className="page-sub">LifeOS Agent System · All agents healthy</div>
+    </div>
 
-      <div className="grid grid-4" style={{marginBottom:20}}>
-        <div className="card"><div className="card-header"><span className="card-title">Total Agents</span></div>
-          <div className="card-body"><div className="card-value">{agents.total}</div>
-          <div className="card-sub">{agents.by_status?.active||0} active · {agents.by_status?.maintenance||0} maintenance</div></div></div>
+    <div className="grid grid-4" style=${{marginBottom:20}}>
+      <div className="card"><div className="card-header"><span className="card-title">Total Agents</span></div>
+        <div className="card-body"><div className="card-value">${agents.total}</div>
+        <div className="card-sub">${agents.by_status?.active||0} active · ${agents.by_status?.maintenance||0} maintenance</div></div></div>
 
-        <div className="card" style={{cursor:'pointer'}} onClick={()=>onNav('hitl')}>
-          <div className="card-header"><span className="card-title">HITL Queue</span></div>
-          <div className="card-body">
-            <div className="card-value" style={{color: hitl_queue_depth>0 ? 'var(--orange)' : 'var(--green)'}}>{hitl_queue_depth}</div>
-            <div className="card-sub">{hitl_queue_depth>0 ? '⚠ Awaiting your decision' : '✓ All clear'}</div>
-          </div>
+      <div className="card" style=${{cursor:'pointer'}} onClick=${()=>onNav('hitl')}>
+        <div className="card-header"><span className="card-title">HITL Queue</span></div>
+        <div className="card-body">
+          <div className="card-value" style=${{color: hitl_queue_depth>0 ? 'var(--orange)' : 'var(--green)'}}>${hitl_queue_depth}</div>
+          <div className="card-sub">${hitl_queue_depth>0 ? '⚠ Awaiting your decision' : '✓ All clear'}</div>
         </div>
-
-        <div className="card"><div className="card-header"><span className="card-title">Total Events</span></div>
-          <div className="card-body"><div className="card-value">{audit.total_events}</div>
-          <div className="card-sub">{audit.violations} violations logged</div></div></div>
-
-        <div className="card"><div className="card-header"><span className="card-title">Violations (24h)</span></div>
-          <div className="card-body"><div className="card-value" style={{color:audit.violations>0?'var(--red)':'var(--green)'}}>{audit.violations}</div>
-          <div className="card-sub">{audit.violations>0 ? 'Review audit trail' : 'No issues'}</div></div></div>
       </div>
 
-      <div className="grid grid-2" style={{marginBottom:20}}>
-        {/* Recent Activity */}
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">Recent Activity</span>
-            <button className="btn btn-ghost btn-sm" onClick={load}>{Icon.refresh} Refresh</button>
-          </div>
-          <div className="card-body">
-            {recent_events.map(e => (
-              <div className="event-row" key={e.event_id}>
-                <div className="event-dot" style={{background: severityColor(e.severity)}}/>
+      <div className="card"><div className="card-header"><span className="card-title">Total Events</span></div>
+        <div className="card-body"><div className="card-value">${audit.total_events}</div>
+        <div className="card-sub">${audit.violations} violations logged</div></div></div>
+
+      <div className="card"><div className="card-header"><span className="card-title">Violations (24h)</span></div>
+        <div className="card-body"><div className="card-value" style=${{color:audit.violations>0?'var(--red)':'var(--green)'}}>${audit.violations}</div>
+        <div className="card-sub">${audit.violations>0 ? 'Review audit trail' : 'No issues'}</div></div></div>
+    </div>
+
+    <div className="grid grid-2" style=${{marginBottom:20}}>
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Recent Activity</span>
+          <button className="btn btn-ghost btn-sm" onClick=${load}>${Icon.refresh} Refresh</button>
+        </div>
+        <div className="card-body">
+          ${recent_events.map(e => html`
+            <div className="event-row" key=${e.event_id}>
+              <div className="event-dot" style=${{background: severityColor(e.severity)}}/>
+              <div className="event-content">
+                <div className="event-type">${e.event_type.replace('.', ' › ')}</div>
+                <div className="event-meta">${e.agent_id} · ${timeAgo(e.timestamp)}</div>
+              </div>
+            </div>
+          `)}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><span className="card-title">Recent Violations</span></div>
+        <div className="card-body">
+          ${recent_violations.length === 0
+            ? html`<div className="empty">No violations — governance holding strong ✓</div>`
+            : recent_violations.map(e => html`
+              <div className="event-row" key=${e.event_id}>
+                <div className="event-dot" style=${{background: severityColor(e.severity)}}/>
                 <div className="event-content">
-                  <div className="event-type">{e.event_type.replace('.',  ' › ')}</div>
-                  <div className="event-meta">{e.agent_id} · {timeAgo(e.timestamp)}</div>
+                  <div className="event-type" style=${{color:'var(--red)'}}>${e.event_type.replace('.', ' › ')}</div>
+                  <div className="event-meta">${e.agent_id} · ${e.payload?.reason||e.payload?.attempted||''} · ${timeAgo(e.timestamp)}</div>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Violations */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">Recent Violations</span></div>
-          <div className="card-body">
-            {recent_violations.length === 0
-              ? <div className="empty">No violations — governance holding strong ✓</div>
-              : recent_violations.map(e => (
-                <div className="event-row" key={e.event_id}>
-                  <div className="event-dot" style={{background: severityColor(e.severity)}}/>
-                  <div className="event-content">
-                    <div className="event-type" style={{color:'var(--red)'}}>{e.event_type.replace('.', ' › ')}</div>
-                    <div className="event-meta">{e.agent_id} · {e.payload?.reason||e.payload?.attempted||''} · {timeAgo(e.timestamp)}</div>
-                  </div>
-                </div>
-              ))
-            }
-          </div>
-        </div>
-      </div>
-
-      {/* Agent Health Grid */}
-      <div className="card">
-        <div className="card-header"><span className="card-title">Agent Health</span></div>
-        <div className="card-body">
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Agent</th><th>ID</th><th>Runtime</th><th>Status</th><th>Tags</th></tr></thead>
-              <tbody>
-                {agent_health.map(a => (
-                  <tr key={a.agent_id}>
-                    <td style={{fontWeight:600}}>{a.name}</td>
-                    <td className="font-mono" style={{color:'var(--muted)'}}>{a.agent_id}</td>
-                    <td>{adapterBadge(a.adapter)}</td>
-                    <td>{statusBadge(a.status)}</td>
-                    <td>{a.tags.map(t => <span key={t} className="cap-tag" style={{marginRight:4}}>{t}</span>)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+            `)
+          }
         </div>
       </div>
     </div>
-  );
+
+    <div className="card">
+      <div className="card-header"><span className="card-title">Agent Health</span></div>
+      <div className="card-body">
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Agent</th><th>ID</th><th>Runtime</th><th>Status</th><th>Tags</th></tr></thead>
+            <tbody>
+              ${agent_health.map(a => html`
+                <tr key=${a.agent_id}>
+                  <td style=${{fontWeight:600}}>${a.name}</td>
+                  <td className="font-mono" style=${{color:'var(--muted)'}}>${a.agent_id}</td>
+                  <td>${adapterBadge(a.runtime_adapter)}</td>
+                  <td>${statusBadge(a.status)}</td>
+                  <td>${a.tags.map(t => html`<span key=${t} className="cap-tag" style=${{marginRight:4}}>${t}</span>`)}</td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── Registry ───────────────────────────────────────────────────────────────
@@ -400,6 +406,7 @@ function Registry({onToast, user}) {
 
   async function handleRegister(e) {
     e.preventDefault();
+    uiLog('agent_register', {agent_id: form.agent_id, name: form.name, adapter: form.runtime_adapter, user: user?.email});
     try {
       await api('/agents', {method:'POST', body: JSON.stringify({...form, tags: form.tags.split(',').map(t=>t.trim()).filter(Boolean)})});
       onToast('Agent registered successfully', 'success');
@@ -411,6 +418,7 @@ function Registry({onToast, user}) {
 
   async function handleDeprecate(agent_id, name) {
     if (!confirm(`Deprecate "${name}"?`)) return;
+    uiLog('agent_deprecate', {agent_id, name, user: user?.email});
     try {
       await api(`/agents/${agent_id}/deprecate`, {method:'PATCH'});
       onToast(`${name} deprecated`, 'success');
@@ -418,103 +426,101 @@ function Registry({onToast, user}) {
     } catch(err) { onToast(err.message, 'error'); }
   }
 
-  return (
-    <div>
-      <div className="page-header flex items-center justify-between">
-        <div>
-          <div className="page-title">Agent Registry</div>
-          <div className="page-sub">{agents.length} agents registered · Capabilities, versions, and runtime adapters</div>
-        </div>
-        {can(user,'register_agent') &&
-          <button className="btn btn-primary" onClick={()=>setShowRegister(true)}>+ Register Agent</button>}
+  return html`<div>
+    <div className="page-header flex items-center justify-between">
+      <div>
+        <div className="page-title">Agent Registry</div>
+        <div className="page-sub">${agents.length} agents registered · Capabilities, versions, and runtime adapters</div>
       </div>
-
-      <div className="grid grid-3">
-        {agents.map(a => (
-          <div className="agent-card" key={a.agent_id}>
-            <div className="agent-card-header">
-              <div>
-                <div className="agent-name">{a.name}</div>
-                <div className="agent-id">{a.agent_id} · v{a.version}</div>
-              </div>
-              <div style={{display:'flex', gap:6, alignItems:'flex-start'}}>
-                {statusBadge(a.status)}
-              </div>
-            </div>
-            <div className="agent-desc">{a.description}</div>
-            <div style={{marginBottom:10, display:'flex', gap:6, alignItems:'center'}}>
-              {adapterBadge(a.runtime_adapter)}
-              <span className="text-muted">·</span>
-              <span className="text-muted">{a.owner}</span>
-            </div>
-            <div className="cap-list">
-              {(a.capabilities||[]).map(c => (
-                <span key={c.name} className={`cap-tag ${c.requires_hitl?'hitl':''}`} title={c.description}>
-                  {c.requires_hitl ? '👤 ' : ''}{c.name}
-                </span>
-              ))}
-            </div>
-            {a.tags?.length > 0 && (
-              <div style={{marginTop:10, display:'flex', gap:4, flexWrap:'wrap'}}>
-                {a.tags.map(t => <span key={t} className="badge badge-gray" style={{fontSize:10}}>{t}</span>)}
-              </div>
-            )}
-            {a.status === 'active' && can(user,'deprecate_agent') && (
-              <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={()=>handleDeprecate(a.agent_id, a.name)}>
-                Deprecate
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {showRegister && (
-        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowRegister(false)}>
-          <div className="modal">
-            <div className="modal-header">
-              <span className="modal-title">Register New Agent</span>
-              <button className="close-btn" onClick={()=>setShowRegister(false)}>×</button>
-            </div>
-            <form onSubmit={handleRegister}>
-              <div className="modal-body">
-                <div className="grid grid-2">
-                  <div className="form-group"><label>Agent ID</label>
-                    <input required placeholder="my-agent-001" value={form.agent_id} onChange={e=>setForm({...form,agent_id:e.target.value})}/></div>
-                  <div className="form-group"><label>Name</label>
-                    <input required placeholder="My Agent" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></div>
-                </div>
-                <div className="grid grid-2">
-                  <div className="form-group"><label>Version</label>
-                    <input required value={form.version} onChange={e=>setForm({...form,version:e.target.value})}/></div>
-                  <div className="form-group"><label>Owner</label>
-                    <input required placeholder="team-name" value={form.owner} onChange={e=>setForm({...form,owner:e.target.value})}/></div>
-                </div>
-                <div className="form-group"><label>Description</label>
-                  <textarea rows={2} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></div>
-                <div className="grid grid-2">
-                  <div className="form-group"><label>Runtime Adapter</label>
-                    <select value={form.runtime_adapter} onChange={e=>setForm({...form,runtime_adapter:e.target.value})}>
-                      <option>anthropic</option><option>openai</option><option>langchain</option><option>vertex</option>
-                    </select></div>
-                  <div className="form-group"><label>Tags (comma-separated)</label>
-                    <input placeholder="finance, nlp" value={form.tags} onChange={e=>setForm({...form,tags:e.target.value})}/></div>
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-ghost" onClick={()=>setShowRegister(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Register</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      ${can(user,'register_agent') &&
+        html`<button className="btn btn-primary" onClick=${()=>setShowRegister(true)}>+ Register Agent</button>`}
     </div>
-  );
+
+    <div className="grid grid-3">
+      ${agents.map(a => html`
+        <div className="agent-card" key=${a.agent_id}>
+          <div className="agent-card-header">
+            <div>
+              <div className="agent-name">${a.name}</div>
+              <div className="agent-id">${a.agent_id} · v${a.version}</div>
+            </div>
+            <div style=${{display:'flex', gap:6, alignItems:'flex-start'}}>
+              ${statusBadge(a.status)}
+            </div>
+          </div>
+          <div className="agent-desc">${a.description}</div>
+          <div style=${{marginBottom:10, display:'flex', gap:6, alignItems:'center'}}>
+            ${adapterBadge(a.runtime_adapter)}
+            <span className="text-muted">·</span>
+            <span className="text-muted">${a.owner}</span>
+          </div>
+          <div className="cap-list">
+            ${(a.capabilities||[]).map(c => html`
+              <span key=${c.name} className=${`cap-tag ${c.requires_hitl?'hitl':''}`} title=${c.description}>
+                ${c.requires_hitl ? '👤 ' : ''}${c.name}
+              </span>
+            `)}
+          </div>
+          ${a.tags?.length > 0 && html`
+            <div style=${{marginTop:10, display:'flex', gap:4, flexWrap:'wrap'}}>
+              ${a.tags.map(t => html`<span key=${t} className="badge badge-gray" style=${{fontSize:10}}>${t}</span>`)}
+            </div>
+          `}
+          ${a.status === 'active' && can(user,'deprecate_agent') && html`
+            <button className="btn btn-ghost btn-sm" style=${{marginTop:12}} onClick=${()=>handleDeprecate(a.agent_id, a.name)}>
+              Deprecate
+            </button>
+          `}
+        </div>
+      `)}
+    </div>
+
+    ${showRegister && html`
+      <div className="modal-overlay" onClick=${e=>e.target===e.currentTarget&&setShowRegister(false)}>
+        <div className="modal">
+          <div className="modal-header">
+            <span className="modal-title">Register New Agent</span>
+            <button className="close-btn" onClick=${()=>setShowRegister(false)}>×</button>
+          </div>
+          <form onSubmit=${handleRegister}>
+            <div className="modal-body">
+              <div className="grid grid-2">
+                <div className="form-group"><label>Agent ID</label>
+                  <input required placeholder="my-agent-001" value=${form.agent_id} onChange=${e=>setForm({...form,agent_id:e.target.value})}/></div>
+                <div className="form-group"><label>Name</label>
+                  <input required placeholder="My Agent" value=${form.name} onChange=${e=>setForm({...form,name:e.target.value})}/></div>
+              </div>
+              <div className="grid grid-2">
+                <div className="form-group"><label>Version</label>
+                  <input required value=${form.version} onChange=${e=>setForm({...form,version:e.target.value})}/></div>
+                <div className="form-group"><label>Owner</label>
+                  <input required placeholder="team-name" value=${form.owner} onChange=${e=>setForm({...form,owner:e.target.value})}/></div>
+              </div>
+              <div className="form-group"><label>Description</label>
+                <textarea rows="2" value=${form.description} onChange=${e=>setForm({...form,description:e.target.value})}></textarea></div>
+              <div className="grid grid-2">
+                <div className="form-group"><label>Runtime Adapter</label>
+                  <select value=${form.runtime_adapter} onChange=${e=>setForm({...form,runtime_adapter:e.target.value})}>
+                    <option>anthropic</option><option>openai</option><option>langchain</option><option>vertex</option>
+                  </select></div>
+                <div className="form-group"><label>Tags (comma-separated)</label>
+                  <input placeholder="finance, nlp" value=${form.tags} onChange=${e=>setForm({...form,tags:e.target.value})}/></div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-ghost" onClick=${()=>setShowRegister(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Register</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `}
+  </div>`;
 }
 
 // ── HITL Queue ─────────────────────────────────────────────────────────────
 function HITLQueue({onToast, onCountChange, user}) {
-  if (!can(user, 'view_hitl')) return <AccessDenied role={user?.role} required="supervisor or admin"/>;
+  if (!can(user, 'view_hitl')) return html`<${AccessDenied} role=${user?.role} required="supervisor or admin"/>`;
   const [items, setItems] = useState([]);
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -524,6 +530,7 @@ function HITLQueue({onToast, onCountChange, user}) {
   useEffect(() => { load(); const t=setInterval(load, 5000); return ()=>clearInterval(t); }, []);
 
   async function approve(id, action) {
+    uiLog('hitl_approve', {request_id: id, action, user: user?.email});
     try {
       await api(`/hitl/${id}/approve`, {method:'POST', body: JSON.stringify({reviewer_id:'you@lifeos', reason:'Approved via console'})});
       onToast(`✓ Approved: ${action}`, 'success');
@@ -533,6 +540,7 @@ function HITLQueue({onToast, onCountChange, user}) {
 
   async function reject() {
     if (!rejectReason.trim()) return;
+    uiLog('hitl_reject', {request_id: rejectModal.request_id, action: rejectModal.action, user: user?.email});
     try {
       await api(`/hitl/${rejectModal.request_id}/reject`, {method:'POST', body: JSON.stringify({reviewer_id:'you@lifeos', reason:rejectReason})});
       onToast(`✗ Rejected: ${rejectModal.action}`, 'error');
@@ -550,96 +558,93 @@ function HITLQueue({onToast, onCountChange, user}) {
     return 'LOW';
   }
 
-  return (
-    <div>
-      <div className="page-header">
-        <div className="page-title">HITL Approval Queue</div>
-        <div className="page-sub">
-          {items.length === 0
-            ? 'No pending approvals — your agents are operating within policy'
-            : `${items.length} action${items.length>1?'s':''} waiting for your decision`}
+  return html`<div>
+    <div className="page-header">
+      <div className="page-title">HITL Approval Queue</div>
+      <div className="page-sub">
+        ${items.length === 0
+          ? 'No pending approvals — your agents are operating within policy'
+          : `${items.length} action${items.length>1?'s':''} waiting for your decision`}
+      </div>
+    </div>
+
+    ${items.length === 0 && html`
+      <div className="card"><div className="empty" style=${{padding:60}}>
+        <div style=${{fontSize:32, marginBottom:12}}>✓</div>
+        <div style=${{fontWeight:600, color:'var(--green)', marginBottom:6}}>All clear</div>
+        <div>No agents are waiting for your approval right now.</div>
+      </div></div>
+    `}
+
+    ${items.map(item => {
+      const urg = urgency(item);
+      const urgColor = {LOW:'var(--blue)',MEDIUM:'var(--orange)',HIGH:'var(--red)',CRITICAL:'var(--red)'}[urg];
+      return html`
+        <div className=${`hitl-card ${urg==='CRITICAL'||urg==='HIGH' ? 'urgent' : ''}`} key=${item.request_id}>
+          <div className="hitl-header">
+            <div>
+              <div style=${{display:'flex', alignItems:'center', gap:8}}>
+                <span className="hitl-agent">${item.agent_id}</span>
+                <span className="badge badge-gray">${item.reviewer_group}</span>
+                <span className="badge" style=${{background:'rgba(0,0,0,0.2)',color:urgColor}}>${urg}</span>
+              </div>
+            </div>
+            <div className="timer">⏱ ${Math.floor(item.age_seconds/60)}m waiting · Tier ${item.escalation_tier?.toUpperCase()}</div>
+          </div>
+          <div className="hitl-action">${item.action.replace(/_/g,' ')}</div>
+          <div className="hitl-resource" style=${{marginBottom:4}}>Resource: <strong>${item.resource}</strong></div>
+          <div className="context-grid">
+            ${Object.entries(item.context||{}).map(([k,v]) => html`
+              <div className="ctx-item" key=${k}>
+                <div className="ctx-label">${k.replace(/_/g,' ')}</div>
+                <div className="ctx-value">${typeof v==='number' && k.includes('usd') ? `$${Number(v).toLocaleString()}` : String(v)}</div>
+              </div>
+            `)}
+          </div>
+          <div className="hitl-footer">
+            ${can(user,'approve_hitl') && html`
+              <>
+                <button className="btn btn-success" onClick=${()=>approve(item.request_id, item.action)}>
+                  ${Icon.check} Approve
+                </button>
+                <button className="btn btn-danger" onClick=${()=>{setRejectModal(item);setRejectReason('');}}>
+                  ${Icon.x} Reject
+                </button>
+              </>
+            `}
+            ${!can(user,'approve_hitl') && html`<span className="badge badge-gray">👁 View only — supervisor role required to approve</span>`}
+            <span className="text-muted" style=${{marginLeft:'auto', alignSelf:'center'}}>
+              Expires ${timeAgo(item.expires_at - 99999)} · Run: <span className="font-mono">${item.correlation_id}</span>
+            </span>
+          </div>
+        </div>
+      `;
+    })}
+
+    ${rejectModal && html`
+      <div className="modal-overlay" onClick=${e=>e.target===e.currentTarget&&setRejectModal(null)}>
+        <div className="modal">
+          <div className="modal-header">
+            <span className="modal-title">Reject: ${rejectModal.action.replace(/_/g,' ')}</span>
+            <button className="close-btn" onClick=${()=>setRejectModal(null)}>×</button>
+          </div>
+          <div className="modal-body">
+            <div style=${{background:'rgba(248,113,113,0.08)',border:'1px solid rgba(248,113,113,0.2)',borderRadius:6,padding:'10px 14px',marginBottom:14,fontSize:13}}>
+              You are rejecting <strong>${rejectModal.action.replace(/_/g,' ')}</strong> requested by <strong>${rejectModal.agent_id}</strong>.
+              The agent will be blocked from executing this action.
+            </div>
+            <div className="form-group"><label>Reason (required)</label>
+              <textarea rows="3" placeholder="e.g. Incorrect payee — not suspicious" value=${rejectReason} onChange=${e=>setRejectReason(e.target.value)} autoFocus></textarea>
+            </div>
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick=${()=>setRejectModal(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick=${reject} disabled=${!rejectReason.trim()}>Confirm Reject</button>
+          </div>
         </div>
       </div>
-
-      {items.length === 0 && (
-        <div className="card"><div className="empty" style={{padding:60}}>
-          <div style={{fontSize:32, marginBottom:12}}>✓</div>
-          <div style={{fontWeight:600, color:'var(--green)', marginBottom:6}}>All clear</div>
-          <div>No agents are waiting for your approval right now.</div>
-        </div></div>
-      )}
-
-      {items.map(item => {
-        const urg = urgency(item);
-        const urgColor = {LOW:'var(--blue)',MEDIUM:'var(--orange)',HIGH:'var(--red)',CRITICAL:'var(--red)'}[urg];
-        return (
-          <div className={`hitl-card ${urg==='CRITICAL'||urg==='HIGH' ? 'urgent' : ''}`} key={item.request_id}>
-            <div className="hitl-header">
-              <div>
-                <div style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className="hitl-agent">{item.agent_id}</span>
-                  <span className="badge badge-gray">{item.reviewer_group}</span>
-                  <span className="badge" style={{background:`rgba(0,0,0,0.2)`,color:urgColor}}>{urg}</span>
-                </div>
-              </div>
-              <div className="timer">⏱ {Math.floor(item.age_seconds/60)}m waiting · Tier {item.escalation_tier?.toUpperCase()}</div>
-            </div>
-
-            <div className="hitl-action">{item.action.replace(/_/g,' ')}</div>
-            <div className="hitl-resource" style={{marginBottom:4}}>Resource: <strong>{item.resource}</strong></div>
-
-            <div className="context-grid">
-              {Object.entries(item.context||{}).map(([k,v]) => (
-                <div className="ctx-item" key={k}>
-                  <div className="ctx-label">{k.replace(/_/g,' ')}</div>
-                  <div className="ctx-value">{typeof v==='number' && k.includes('usd') ? `$${Number(v).toLocaleString()}` : String(v)}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className="hitl-footer">
-              {can(user,'approve_hitl') && <>
-              <button className="btn btn-success" onClick={()=>approve(item.request_id, item.action)}>
-                {Icon.check} Approve
-              </button>
-              <button className="btn btn-danger" onClick={()=>{setRejectModal(item);setRejectReason('');}}>
-                {Icon.x} Reject
-              </button>
-              </>}
-              {!can(user,'approve_hitl') && <span className="badge badge-gray">👁 View only — supervisor role required to approve</span>}
-              <span className="text-muted" style={{marginLeft:'auto', alignSelf:'center'}}>
-                Expires {timeAgo(item.expires_at - 99999)} · Run: <span className="font-mono">{item.correlation_id}</span>
-              </span>
-            </div>
-          </div>
-        );
-      })}
-
-      {rejectModal && (
-        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setRejectModal(null)}>
-          <div className="modal">
-            <div className="modal-header">
-              <span className="modal-title">Reject: {rejectModal.action.replace(/_/g,' ')}</span>
-              <button className="close-btn" onClick={()=>setRejectModal(null)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div style={{background:'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.2)', borderRadius:6, padding:'10px 14px', marginBottom:14, fontSize:13}}>
-                You are rejecting <strong>{rejectModal.action.replace(/_/g,' ')}</strong> requested by <strong>{rejectModal.agent_id}</strong>.
-                The agent will be blocked from executing this action.
-              </div>
-              <div className="form-group"><label>Reason (required)</label>
-                <textarea rows={3} placeholder="e.g. Incorrect payee — that's my landlord, not suspicious" value={rejectReason} onChange={e=>setRejectReason(e.target.value)} autoFocus/>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={()=>setRejectModal(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={reject} disabled={!rejectReason.trim()}>Confirm Reject</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    `}
+  </div>`;
 }
 
 // ── Audit Trail ────────────────────────────────────────────────────────────
@@ -668,110 +673,108 @@ function AuditTrail({onToast, user}) {
 
   const events = data?.events || [];
   const stats = data?.stats || {};
-
-  // Unique correlation ids for quick filter
   const corrIds = [...new Set(events.map(e=>e.correlation_id))].slice(0,8);
 
-  return (
-    <div>
-      <div className="page-header flex items-center justify-between">
-        <div>
-          <div className="page-title">Audit Trail</div>
-          <div className="page-sub">{stats.total_events||0} total events · Tamper-evident chained log</div>
-        </div>
-        <div style={{display:'flex',gap:8}}>
-          {can(user,'export_audit') &&
-            <a className="btn btn-ghost btn-sm" href="/api/audit/export?format=csv" download>
-              ↓ Export CSV
-            </a>}
-          <button className="btn btn-ghost btn-sm" onClick={load}>{Icon.refresh} Refresh</button>
-        </div>
+  return html`<div>
+    <div className="page-header flex items-center justify-between">
+      <div>
+        <div className="page-title">Audit Trail</div>
+        <div className="page-sub">${stats.total_events||0} total events · Tamper-evident chained log</div>
       </div>
-
-      <div className="filter-row">
-        <input style={{width:180}} placeholder="Filter by agent ID" value={filters.agent_id}
-          onChange={e=>setFilters({...filters,agent_id:e.target.value})}/>
-        <select style={{width:140}} value={filters.severity} onChange={e=>setFilters({...filters,severity:e.target.value})}>
-          <option value="">All severities</option>
-          <option value="debug">Debug+</option>
-          <option value="info">Info+</option>
-          <option value="warning">Warning+</option>
-          <option value="error">Error+</option>
-        </select>
-        <select style={{width:220}} value={filters.correlation_id} onChange={e=>setFilters({...filters,correlation_id:e.target.value})}>
-          <option value="">All runs</option>
-          {corrIds.map(c=><option key={c} value={c}>{c}</option>)}
-        </select>
-        {(filters.agent_id||filters.severity||filters.correlation_id) &&
-          <button className="btn btn-ghost btn-sm" onClick={()=>setFilters({agent_id:'',severity:'',correlation_id:''})}>Clear</button>}
-      </div>
-
-      <div className="grid grid-2">
-        <div className="card" style={{gridColumn: replay ? '1' : '1/-1'}}>
-          <div className="card-body" style={{padding:0}}>
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Time</th><th>Event</th><th>Agent</th><th>Severity</th><th>Run</th><th></th></tr></thead>
-                <tbody>
-                  {events.map(e=>(
-                    <tr key={e.event_id} style={{cursor:'pointer'}} onClick={()=>setExpanded(expanded===e.event_id?null:e.event_id)}>
-                      <td style={{color:'var(--muted)', width:70}}>{fmtTime(e.timestamp)}</td>
-                      <td style={{fontWeight:500}}>{e.event_type.replace(/\./g,' › ')}</td>
-                      <td className="font-mono" style={{color:'var(--muted)'}}>{e.agent_id}</td>
-                      <td><span className="badge" style={{background:`${severityColor(e.severity)}22`, color:severityColor(e.severity)}}>{e.severity}</span></td>
-                      <td className="font-mono" style={{fontSize:11, color:'var(--muted)', maxWidth:120, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{e.correlation_id}</td>
-                      <td>
-                        <button className="btn btn-ghost btn-sm" onClick={ev=>{ev.stopPropagation();loadReplay(e.correlation_id);}}>
-                          {Icon.play}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {events.length===0 && <tr><td colSpan={6}><div className="empty">No events match your filters</div></td></tr>}
-                </tbody>
-              </table>
-            </div>
-
-            {expanded && (() => {
-              const e = events.find(ev=>ev.event_id===expanded);
-              return e ? (
-                <div style={{padding:'14px 20px', background:'var(--surface2)', borderTop:'1px solid var(--border)'}}>
-                  <div style={{marginBottom:8, fontWeight:600, fontSize:12}}>Event Payload</div>
-                  <pre style={{fontSize:12, color:'var(--text)', overflow:'auto', maxHeight:150}}>{JSON.stringify(e.payload, null, 2)}</pre>
-                  {e.previous_event_id && <div style={{marginTop:8, fontSize:11, color:'var(--muted)'}}>⛓ Chained from: <span className="font-mono">{e.previous_event_id}</span></div>}
-                </div>
-              ) : null;
-            })()}
-          </div>
-        </div>
-
-        {replay && (
-          <div className="card">
-            <div className="card-header">
-              <span className="card-title">Run Replay</span>
-              <button className="close-btn" onClick={()=>setReplay(null)}>×</button>
-            </div>
-            <div className="card-body">
-              <div className="font-mono" style={{fontSize:11, color:'var(--muted)', marginBottom:12}}>{replay.correlation_id}</div>
-              {replay.steps.map(s=>(
-                <div className="replay-step" key={s.step}>
-                  <div className="step-num">{s.step}</div>
-                  <div className="step-content">
-                    <div className="step-type" style={{color:severityColor(s.severity)}}>{s.type.replace(/\./g,' › ')}</div>
-                    <div className="step-meta">{s.agent} · {fmtTime(s.timestamp)}</div>
-                    {Object.keys(s.payload||{}).length > 0 &&
-                      <div style={{fontSize:11, color:'var(--muted)', marginTop:3}}>
-                        {Object.entries(s.payload).slice(0,3).map(([k,v])=>`${k}: ${v}`).join(' · ')}
-                      </div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+      <div style=${{display:'flex',gap:8}}>
+        ${can(user,'export_audit') && html`
+          <a className="btn btn-ghost btn-sm" href="/api/audit/export?format=csv" download>
+            ↓ Export CSV
+          </a>
+        `}
+        <button className="btn btn-ghost btn-sm" onClick=${load}>${Icon.refresh} Refresh</button>
       </div>
     </div>
-  );
+
+    <div className="filter-row">
+      <input style=${{width:180}} placeholder="Filter by agent ID" value=${filters.agent_id}
+        onChange=${e=>setFilters({...filters,agent_id:e.target.value})}/>
+      <select style=${{width:140}} value=${filters.severity} onChange=${e=>setFilters({...filters,severity:e.target.value})}>
+        <option value="">All severities</option>
+        <option value="debug">Debug+</option>
+        <option value="info">Info+</option>
+        <option value="warning">Warning+</option>
+        <option value="error">Error+</option>
+      </select>
+      <select style=${{width:220}} value=${filters.correlation_id} onChange=${e=>setFilters({...filters,correlation_id:e.target.value})}>
+        <option value="">All runs</option>
+        ${corrIds.map(c=>html`<option key=${c} value=${c}>${c}</option>`)}
+      </select>
+      ${(filters.agent_id||filters.severity||filters.correlation_id) && html`
+        <button className="btn btn-ghost btn-sm" onClick=${()=>setFilters({agent_id:'',severity:'',correlation_id:''})}>Clear</button>
+      `}
+    </div>
+
+    <div className="grid grid-2">
+      <div className="card" style=${{gridColumn: replay ? '1' : '1/-1'}}>
+        <div className="card-body" style=${{padding:0}}>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Event</th><th>Agent</th><th>Severity</th><th>Run</th><th></th></tr></thead>
+              <tbody>
+                ${events.map(e=>html`
+                  <tr key=${e.event_id} style=${{cursor:'pointer'}} onClick=${()=>setExpanded(expanded===e.event_id?null:e.event_id)}>
+                    <td style=${{color:'var(--muted)',width:70}}>${fmtTime(e.timestamp)}</td>
+                    <td style=${{fontWeight:500}}>${e.event_type.replace(/\./g,' › ')}</td>
+                    <td className="font-mono" style=${{color:'var(--muted)'}}>${e.agent_id}</td>
+                    <td><span className="badge" style=${{background:`${severityColor(e.severity)}22`,color:severityColor(e.severity)}}>${e.severity}</span></td>
+                    <td className="font-mono" style=${{fontSize:11,color:'var(--muted)',maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>${e.correlation_id}</td>
+                    <td>
+                      <button className="btn btn-ghost btn-sm" onClick=${ev=>{ev.stopPropagation();loadReplay(e.correlation_id);}}>
+                        ${Icon.play}
+                      </button>
+                    </td>
+                  </tr>
+                `)}
+                ${events.length===0 && html`<tr><td colSpan="6"><div className="empty">No events match your filters</div></td></tr>`}
+              </tbody>
+            </table>
+          </div>
+          ${expanded && (() => {
+            const e = events.find(ev=>ev.event_id===expanded);
+            return e ? html`
+              <div style=${{padding:'14px 20px',background:'var(--surface2)',borderTop:'1px solid var(--border)'}}>
+                <div style=${{marginBottom:8,fontWeight:600,fontSize:12}}>Event Payload</div>
+                <pre style=${{fontSize:12,color:'var(--text)',overflow:'auto',maxHeight:150}}>${JSON.stringify(e.payload, null, 2)}</pre>
+                ${e.previous_event_id && html`<div style=${{marginTop:8,fontSize:11,color:'var(--muted)'}}>⛓ Chained from: <span className="font-mono">${e.previous_event_id}</span></div>`}
+              </div>
+            ` : null;
+          })()}
+        </div>
+      </div>
+
+      ${replay && html`
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Run Replay</span>
+            <button className="close-btn" onClick=${()=>setReplay(null)}>×</button>
+          </div>
+          <div className="card-body">
+            <div className="font-mono" style=${{fontSize:11,color:'var(--muted)',marginBottom:12}}>${replay.correlation_id}</div>
+            ${replay.steps.map(s=>html`
+              <div className="replay-step" key=${s.step}>
+                <div className="step-num">${s.step}</div>
+                <div className="step-content">
+                  <div className="step-type" style=${{color:severityColor(s.severity)}}>${s.type.replace(/\./g,' › ')}</div>
+                  <div className="step-meta">${s.agent} · ${fmtTime(s.timestamp)}</div>
+                  ${Object.keys(s.payload||{}).length > 0 && html`
+                    <div style=${{fontSize:11,color:'var(--muted)',marginTop:3}}>
+                      ${Object.entries(s.payload).slice(0,3).map(([k,v])=>`${k}: ${v}`).join(' · ')}
+                    </div>
+                  `}
+                </div>
+              </div>
+            `)}
+          </div>
+        </div>
+      `}
+    </div>
+  </div>`;
 }
 
 // ── Login Screen ───────────────────────────────────────────────────────────
@@ -801,80 +804,74 @@ function LoginScreen({onLogin}) {
       if (!r.ok) throw new Error(data.detail || 'Invalid email or password');
       if (!data.access_token) throw new Error('No token returned from server');
       TokenStore.set(data.access_token);
-      TokenStore.setUser(data.user || {email, role:'viewer', name: email});
-      onLogin(data.user || {email, role:'viewer', name: email});
+      const u = data.user || {email, role:'viewer', name: email};
+      TokenStore.setUser(u);
+      uiLog('login_success', {email: email.trim().toLowerCase(), role: u.role});
+      onLogin(u);
     } catch(err) {
+      uiLog('login_failed', {email: email.trim().toLowerCase(), error: err.message});
       setError(err.message);
       setLoading(false);
     }
   }
 
-  return (
-    <div style={{minHeight:'100vh',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
-      <div style={{width:'100%',maxWidth:420}}>
-        {/* Logo */}
-        <div style={{textAlign:'center',marginBottom:32}}>
-          <div style={{fontSize:28,fontWeight:800,color:'var(--text)',marginBottom:6}}>⬡ AgentForge</div>
-          <div style={{fontSize:13,color:'var(--muted)'}}>Enterprise Console</div>
+  return html`
+    <div style=${{minHeight:'100vh',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style=${{width:'100%',maxWidth:420}}>
+        <div style=${{textAlign:'center',marginBottom:32}}>
+          <div style=${{fontSize:28,fontWeight:800,color:'var(--text)',marginBottom:6}}>⬡ AgentForge</div>
+          <div style=${{fontSize:13,color:'var(--muted)'}}>Enterprise Console</div>
         </div>
-
-        {/* Login card */}
-        <div className="card" style={{padding:28}}>
-          <div style={{fontSize:17,fontWeight:700,marginBottom:4}}>Sign in</div>
-          <div style={{fontSize:13,color:'var(--muted)',marginBottom:22}}>Use a demo account below or enter your credentials.</div>
-
-          {error && <div style={{background:'rgba(248,113,113,0.1)',border:'1px solid rgba(248,113,113,0.3)',borderRadius:6,padding:'10px 14px',color:'var(--red)',fontSize:13,marginBottom:16}}>{error}</div>}
-
-          <form onSubmit={handleLogin}>
+        <div className="card" style=${{padding:28}}>
+          <div style=${{fontSize:17,fontWeight:700,marginBottom:4}}>Sign in</div>
+          <div style=${{fontSize:13,color:'var(--muted)',marginBottom:22}}>Use a demo account below or enter your credentials.</div>
+          ${error && html`<div style=${{background:'rgba(248,113,113,0.1)',border:'1px solid rgba(248,113,113,0.3)',borderRadius:6,padding:'10px 14px',color:'var(--red)',fontSize:13,marginBottom:16}}>${error}</div>`}
+          <form onSubmit=${handleLogin}>
             <div className="form-group">
               <label>Email</label>
-              <input type="email" required placeholder="you@company.com" value={email} onChange={e=>setEmail(e.target.value)} autoFocus/>
+              <input type="email" required placeholder="you@company.com" value=${email} onChange=${e=>setEmail(e.target.value)} autoFocus/>
             </div>
             <div className="form-group">
               <label>Password</label>
-              <input type="password" required placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)}/>
+              <input type="password" required placeholder="••••••••" value=${password} onChange=${e=>setPassword(e.target.value)}/>
             </div>
-            <button type="submit" className="btn btn-primary" style={{width:'100%',justifyContent:'center',padding:'10px',marginTop:4}} disabled={loading}>
-              {loading ? 'Signing in…' : 'Sign in →'}
+            <button type="submit" className="btn btn-primary" style=${{width:'100%',justifyContent:'center',padding:'10px',marginTop:4}} disabled=${loading}>
+              ${loading ? 'Signing in...' : 'Sign in →'}
             </button>
           </form>
         </div>
-
-        {/* Demo accounts */}
-        <div style={{marginTop:20}}>
-          <div style={{fontSize:11,color:'var(--muted)',textAlign:'center',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}}>
-            Demo accounts — password: <span style={{color:'var(--text)',fontFamily:'monospace'}}>demo1234</span>
+        <div style=${{marginTop:20}}>
+          <div style=${{fontSize:11,color:'var(--muted)',textAlign:'center',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}}>
+            Demo accounts — password: <span style=${{color:'var(--text)',fontFamily:'monospace'}}>demo1234</span>
           </div>
-          {DEMO_ACCOUNTS.map(a=>(
-            <div key={a.email}
-              style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',marginBottom:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between'}}
-              onClick={()=>{setEmail(a.email);setPassword('demo1234');}}>
+          ${DEMO_ACCOUNTS.map(a=>html`
+            <div key=${a.email}
+              style=${{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',marginBottom:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between'}}
+              onClick=${()=>{setEmail(a.email);setPassword('demo1234');}}>
               <div>
-                <div style={{fontSize:13,fontWeight:600}}>{a.email}</div>
-                <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>{a.desc}</div>
+                <div style=${{fontSize:13,fontWeight:600}}>${a.email}</div>
+                <div style=${{fontSize:11,color:'var(--muted)',marginTop:2}}>${a.desc}</div>
               </div>
-              <span className={`badge ${a.role==='Admin'?'badge-blue':a.role==='Supervisor'?'badge-orange':'badge-gray'}`}>{a.role}</span>
+              <span className=${`badge ${a.role==='Admin'?'badge-blue':a.role==='Supervisor'?'badge-orange':'badge-gray'}`}>${a.role}</span>
             </div>
-          ))}
+          `)}
         </div>
       </div>
     </div>
-  );
+  `;
 }
 
-// ── Authenticated shell (all hooks live here, never conditionally) ──────────
+// ── Authenticated shell ────────────────────────────────────────────────────
 function AuthenticatedApp({user, onLogout}) {
   const [page, setPage] = useState('dashboard');
   const [hitlCount, setHitlCount] = useState(0);
   const [toast, setToast] = useState(null);
   const wsRef = useRef(null);
 
-  // Load initial HITL count
   useEffect(() => {
     api('/hitl/pending').then(d=>setHitlCount(d.length)).catch(()=>{});
   }, []);
 
-  // WebSocket for real-time events
   useEffect(() => {
     function connect() {
       try {
@@ -908,86 +905,87 @@ function AuthenticatedApp({user, onLogout}) {
     {id:'__escalation', label:'Escalations', icon:Icon.hitl},
   ];
 
-  return (
-    <>
-      <div className="sidebar">
-        <div className="logo">
-          <div className="logo-title">⬡ AgentForge</div>
-          <div className="logo-sub">Enterprise Console</div>
-        </div>
-        <nav className="nav">
-          {pages.map(p=>(
-            <div key={p.id}
-              className={`nav-item ${page===p.id?'active':''}`}
-              onClick={()=>p.id==='__workflow'?window.location.href='/workflow':p.id==='__orchestration'?window.location.href='/orchestration':p.id==='__escalation'?window.location.href='/escalation':setPage(p.id)}>
-              {p.icon} {p.label}
-              {p.badge && <span className="nav-badge">{p.badge}</span>}
-            </div>
-          ))}
-        </nav>
-        <div className="sidebar-footer">
-          <div style={{fontSize:12,color:'var(--muted)',marginBottom:8}}>
-            <span className="status-dot"/>LifeOS · Connected
+  return html`<>
+    <div className="sidebar">
+      <div className="logo">
+        <div className="logo-title">⬡ AgentForge</div>
+        <div className="logo-sub">Enterprise Console</div>
+      </div>
+      <nav className="nav">
+        ${pages.map(p=>html`
+          <div key=${p.id}
+            className=${`nav-item ${page===p.id?'active':''}`}
+            onClick=${()=>{
+              uiLog('navigate', {to: p.id, user: user?.email});
+              if(p.id==='__workflow') window.location.href='/workflow';
+              else if(p.id==='__orchestration') window.location.href='/orchestration';
+              else if(p.id==='__escalation') window.location.href='/escalation';
+              else setPage(p.id);
+            }}>
+            ${p.icon} ${p.label}
+            ${p.badge && html`<span className="nav-badge">${p.badge}</span>`}
           </div>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-            <div>
-              <div style={{fontSize:12,fontWeight:600,color:'var(--text)'}}>{user?.name||user?.email}</div>
-              <div style={{fontSize:11,color:'var(--muted)'}}>{user?.role}</div>
-            </div>
-            <button className="btn btn-ghost btn-sm" onClick={onLogout} title="Sign out"
-              style={{padding:'4px 8px',fontSize:11}}>
-              Sign out
+        `)}
+      </nav>
+      <div className="sidebar-footer">
+        <div style=${{fontSize:12,color:'var(--muted)',marginBottom:8}}>
+          <span className="status-dot"/>LifeOS · Connected
+        </div>
+        <div style=${{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div>
+            <div style=${{fontSize:12,fontWeight:600,color:'var(--text)'}}>${user?.name||user?.email}</div>
+            <div style=${{fontSize:11,color:'var(--muted)'}}>${user?.role}</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick=${onLogout} title="Sign out"
+            style=${{padding:'4px 8px',fontSize:11}}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div className="main">
+      <div className="topbar">
+        <div className="topbar-title">${pages.find(p=>p.id===page)?.label}</div>
+        <div className="topbar-right">
+          ${hitlCount > 0 && can(user,'view_hitl') && html`
+            <button className="btn btn-danger btn-sm" onClick=${()=>setPage('hitl')}>
+              ⚠ ${hitlCount} Approval${hitlCount>1?'s':''} Pending
             </button>
-          </div>
+          `}
+          <span className="badge badge-green">SOC2 Profile Active</span>
         </div>
       </div>
-
-      <div className="main">
-        <div className="topbar">
-          <div className="topbar-title">
-            {pages.find(p=>p.id===page)?.label}
-          </div>
-          <div className="topbar-right">
-            {hitlCount > 0 && can(user,'view_hitl') &&
-              <button className="btn btn-danger btn-sm" onClick={()=>setPage('hitl')}>
-                ⚠ {hitlCount} Approval{hitlCount>1?'s':''} Pending
-              </button>
-            }
-            <span className="badge badge-green">SOC2 Profile Active</span>
-          </div>
-        </div>
-        <div className="content">
-          {page === 'dashboard' && <Dashboard hitlCount={hitlCount} onNav={setPage} user={user}/>}
-          {page === 'registry' && <Registry onToast={showToast} user={user}/>}
-          {page === 'hitl' && <HITLQueue onToast={showToast} onCountChange={setHitlCount} user={user}/>}
-          {page === 'audit' && <AuditTrail onToast={showToast} user={user}/>}
-        </div>
+      <div className="content">
+        ${page === 'dashboard' && html`<${Dashboard} hitlCount=${hitlCount} onNav=${setPage} user=${user}/>`}
+        ${page === 'registry' && html`<${Registry} onToast=${showToast} user=${user}/>`}
+        ${page === 'hitl'     && html`<${HITLQueue} onToast=${showToast} onCountChange=${setHitlCount} user=${user}/>`}
+        ${page === 'audit'    && html`<${AuditTrail} onToast=${showToast} user=${user}/>`}
       </div>
+    </div>
 
-      {toast && <Toast key={toast.id} msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
-    </>
-  );
+    ${toast && html`<${Toast} key=${toast.id} msg=${toast.msg} type=${toast.type} onClose=${()=>setToast(null)}/>`}
+  </>`;
 }
 
-// ── App root — only one hook here, no conditional hook calls ──────────────
+// ── App root ───────────────────────────────────────────────────────────────
 function App() {
   const [user, setUser] = useState(() => TokenStore.user());
 
-  function handleLogin(u) {
-    setUser(u);
-  }
+  function handleLogin(u) { setUser(u); }
 
   function handleLogout() {
+    uiLog('logout', {user: user?.email, role: user?.role});
     try { fetch('/api/auth/logout', {method:'POST'}); } catch(e) {}
     TokenStore.clear();
     setUser(null);
   }
 
-  if (!user) return <LoginScreen onLogin={handleLogin}/>;
-  return <AuthenticatedApp user={user} onLogout={handleLogout}/>;
+  if (!user) return html`<${LoginScreen} onLogin=${handleLogin}/>`;
+  return html`<${AuthenticatedApp} user=${user} onLogout=${handleLogout}/>`;
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
 </script>
 </body>
 </html>
