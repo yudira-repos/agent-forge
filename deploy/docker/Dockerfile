@@ -53,6 +53,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY agentforge/ ./agentforge/
 COPY ui/ ./ui/
+COPY examples/ ./examples/
 COPY deploy/docker/start.sh ./start.sh
 
 # Non-root user for security

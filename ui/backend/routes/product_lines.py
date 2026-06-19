@@ -38,10 +38,16 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 # ── Make sure the examples/ directory is importable ──────────────────────────
-_repo_root = Path(__file__).parents[3]
-_examples_dir = _repo_root / "examples"
-if str(_examples_dir) not in sys.path:
-    sys.path.insert(0, str(_examples_dir))
+# Supports both local dev (repo root via parents[3]) and Railway/Docker
+# (/app/examples copied by the Dockerfile).
+_repo_root = Path(__file__).parents[3]          # /app  or  <repo-root>
+_examples_candidates = [
+    _repo_root / "examples",                    # standard layout
+    Path("/app/examples"),                      # Railway/Docker explicit path
+]
+for _p in _examples_candidates:
+    if _p.is_dir() and str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from product_lines.health.workflow import PatientCase, run_health_workflow
 from product_lines.investment.workflow import Portfolio, TradeOrder, TradeType, run_investment_workflow
