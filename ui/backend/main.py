@@ -43,6 +43,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 from ui.backend.routes.workflows import router as workflows_router  # noqa: E402
+from ui.backend.routes.product_lines import router as product_lines_router  # noqa: E402
 from ui.backend.db import sqlite_store  # noqa: E402
 
 # IMPORTANT: register /api/workflows/runs* routes BEFORE including the
@@ -75,6 +76,7 @@ def get_run_audit(run_id: str) -> list[dict[str, Any]]:
 
 
 app.include_router(workflows_router)
+app.include_router(product_lines_router)
 
 # ── Health endpoints (liveness + readiness) ───────────────────────────────────
 @app.get("/health")
@@ -963,6 +965,15 @@ def serve_escalation() -> FileResponse:
     if page.exists():
         return FileResponse(str(page))
     return HTMLResponse("<h1>Escalations</h1><p>escalation.html not found.</p>")
+
+
+@app.get("/product-lines")
+def serve_product_lines() -> FileResponse:
+    """Multi-product-line HITL demo — Health, Investment, Kids."""
+    page = STATIC_DIR / "product_lines.html"
+    if page.exists():
+        return FileResponse(str(page))
+    return HTMLResponse("<h1>Product Lines Demo</h1><p>product_lines.html not found in ui/static/</p>")
 
 
 # ── Workflow Execution Engine ─────────────────────────────────────────────────

@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentForge — Product Lines HITL Demo</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --card: #21263a;
+    --border: #2d3348; --accent: #6366f1; --green: #22c55e;
+    --yellow: #f59e0b; --red: #ef4444; --text: #e2e8f0;
+    --muted: #64748b; --health: #06b6d4; --inv: #8b5cf6; --kids: #f97316;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── Header ── */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 28px;
+           display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 1.1rem; font-weight: 600; }
+  .badge { font-size: 0.7rem; background: var(--accent); color: #fff;
+           padding: 2px 8px; border-radius: 99px; }
+  .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-left: auto; }
+  .ws-dot.connected { background: var(--green); }
+  .ws-label { font-size: 0.75rem; color: var(--muted); }
+
+  /* ── Layout ── */
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 20px; padding: 20px 28px; }
+  @media(max-width:900px){ .layout { grid-template-columns: 1fr; } }
+
+  /* ── Cards ── */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+  .card-header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+                 display: flex; align-items: center; gap: 10px; }
+  .card-header h2 { font-size: 0.9rem; font-weight: 600; }
+  .card-body { padding: 18px; }
+
+  /* ── Domain triggers ── */
+  .domains { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+  @media(max-width:700px){ .domains { grid-template-columns: 1fr; } }
+
+  .domain-card { border-radius: 10px; border: 1px solid var(--border);
+                 background: var(--surface); overflow: hidden; }
+  .domain-header { padding: 12px 14px; font-size: 0.8rem; font-weight: 700;
+                   letter-spacing: .05em; display: flex; align-items: center; gap: 8px; }
+  .domain-header.health { background: rgba(6,182,212,.12); color: var(--health); border-bottom: 1px solid rgba(6,182,212,.2); }
+  .domain-header.investment { background: rgba(139,92,246,.12); color: var(--inv); border-bottom: 1px solid rgba(139,92,246,.2); }
+  .domain-header.kids { background: rgba(249,115,22,.12); color: var(--kids); border-bottom: 1px solid rgba(249,115,22,.2); }
+  .domain-body { padding: 14px; }
+
+  .scenario { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+              padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: border-color .15s; }
+  .scenario:hover { border-color: var(--accent); }
+  .scenario:last-child { margin-bottom: 0; }
+  .scenario-title { font-size: 0.8rem; font-weight: 600; margin-bottom: 2px; }
+  .scenario-desc { font-size: 0.72rem; color: var(--muted); line-height: 1.5; }
+  .scenario .hitl-tag { font-size: 0.65rem; background: rgba(99,102,241,.2);
+                        color: #a5b4fc; padding: 1px 6px; border-radius: 4px; margin-top: 4px; display:inline-block; }
+
+  /* ── HITL queue ── */
+  #hitl-list { display: flex; flex-direction: column; gap: 10px; }
+  .hitl-item { background: var(--surface); border: 1px solid var(--border);
+               border-radius: 10px; overflow: hidden; }
+  .hitl-item.health   { border-left: 3px solid var(--health); }
+  .hitl-item.investment { border-left: 3px solid var(--inv); }
+  .hitl-item.kids     { border-left: 3px solid var(--kids); }
+
+  .hitl-top { padding: 10px 12px; display: flex; align-items: flex-start; gap: 8px; }
+  .hitl-pl { font-size: 0.65rem; font-weight: 700; letter-spacing:.06em; padding: 2px 7px;
+             border-radius: 4px; flex-shrink: 0; }
+  .hitl-pl.health { background: rgba(6,182,212,.2); color: var(--health); }
+  .hitl-pl.investment { background: rgba(139,92,246,.2); color: var(--inv); }
+  .hitl-pl.kids { background: rgba(249,115,22,.2); color: var(--kids); }
+
+  .hitl-meta { flex: 1; min-width: 0; }
+  .hitl-action { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hitl-agent { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+  .hitl-summary { padding: 0 12px 8px; font-size: 0.72rem; color: var(--muted);
+                  white-space: pre-line; border-top: 1px solid var(--border); padding-top: 8px; }
+  .hitl-channel { font-size: 0.68rem; color: var(--muted); padding: 0 12px 8px; }
+
+  .hitl-actions { padding: 8px 12px; display: flex; gap: 8px; border-top: 1px solid var(--border); }
+  .btn { font-size: 0.75rem; font-weight: 600; padding: 5px 14px; border-radius: 6px;
+         border: none; cursor: pointer; transition: opacity .15s; }
+  .btn:hover { opacity: .85; }
+  .btn-approve { background: var(--green); color: #000; }
+  .btn-reject  { background: var(--red); color: #fff; }
+  .btn-trigger { background: var(--accent); color: #fff; font-size: 0.72rem;
+                 padding: 5px 12px; border-radius: 6px; border: none; cursor: pointer;
+                 transition: opacity .15s; margin-top: 8px; width: 100%; }
+  .btn-trigger:hover { opacity: .85; }
+  .btn-trigger:disabled { opacity: .5; cursor: not-allowed; }
+
+  .empty-state { text-align: center; padding: 36px 16px; color: var(--muted);
+                 font-size: 0.8rem; line-height: 1.7; }
+
+  /* ── Run log ── */
+  #run-log { max-height: 300px; overflow-y: auto; }
+  .run-item { padding: 8px 10px; border-bottom: 1px solid var(--border);
+              font-size: 0.73rem; display: flex; align-items: center; gap: 8px; }
+  .run-item:last-child { border-bottom: none; }
+  .run-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .run-dot.running  { background: var(--yellow); animation: pulse 1.2s infinite; }
+  .run-dot.completed { background: var(--green); }
+  .run-dot.failed   { background: var(--red); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .run-info { flex: 1; min-width: 0; }
+  .run-id { color: var(--muted); font-family: monospace; font-size: 0.68rem; }
+
+  /* ── Live feed ── */
+  #live-feed { max-height: 180px; overflow-y: auto; }
+  .feed-line { font-size: 0.7rem; font-family: monospace; padding: 3px 0;
+               border-bottom: 1px solid var(--border); color: var(--muted); }
+  .feed-line span { color: var(--accent); }
+
+  /* ── Toast ── */
+  #toast { position: fixed; bottom: 24px; right: 24px; background: var(--card);
+           border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px;
+           font-size: 0.8rem; max-width: 320px; display: none; z-index: 100;
+           box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AgentForge</h1>
+  <span class="badge">Product Lines HITL Demo</span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+    <div class="ws-dot" id="ws-dot"></div>
+    <span class="ws-label" id="ws-label">connecting…</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT: triggers + run log -->
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>🚀 Trigger a Workflow</h2>
+        <span style="font-size:.75rem;color:var(--muted);margin-left:auto">
+          Real HITL → approve/reject in the queue →
+        </span>
+      </div>
+      <div class="card-body">
+        <div class="domains">
+
+          <!-- HEALTH -->
+          <div class="domain-card">
+            <div class="domain-header health">🏥 HEALTH</div>
+            <div class="domain-body">
+              <div class="scenario" onclick="triggerHealth('critical')">
+                <div class="scenario-title">🚨 Critical — Chest Pain</div>
+                <div class="scenario-desc">Age 67 | chest pain + difficulty breathing</div>
+                <span class="hitl-tag">HITL: medication + specialist referral</span>
+              </div>
+              <div class="scenario" onclick="triggerHealth('medium')">
+                <div class="scenario-title">⚠️ Medium — Persistent Cough</div>
+                <div class="scenario-desc">Age 34 | severe pain, persistent cough</div>
+                <span class="hitl-tag">HITL: controlled substance (oxycodone)</span>
+              </div>
+              <div class="scenario" onclick="triggerHealth('low')">
+                <div class="scenario-title">✅ Low — Minor Symptoms</div>
+                <div class="scenario-desc">Age 28 | mild headache</div>
+                <span class="hitl-tag">Auto-approved (low risk)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- INVESTMENT -->
+          <div class="domain-card">
+            <div class="domain-header investment">📈 INVESTMENT</div>
+            <div class="domain-body">
+              <div class="scenario" onclick="triggerInvestment('large_buy')">
+                <div class="scenario-title">💰 Large Buy — $25k BND</div>
+                <div class="scenario-desc">Rebalance into fixed income (10% portfolio)</div>
+                <span class="hitl-tag">HITL: rebalance + dual-control execution</span>
+              </div>
+              <div class="scenario" onclick="triggerInvestment('critical_sell')">
+                <div class="scenario-title">🔴 Critical Sell — $35k AAPL</div>
+                <div class="scenario-desc">Trim overweight (14% portfolio, critical risk)</div>
+                <span class="hitl-tag">HITL: rebalance + execution</span>
+              </div>
+              <div class="scenario" onclick="triggerInvestment('small_buy')">
+                <div class="scenario-title">🟢 Small Buy — $1.5k VTI</div>
+                <div class="scenario-desc">Minor top-up (0.6% portfolio, conservative)</div>
+                <span class="hitl-tag">Auto-approved (&lt; $10k threshold)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- KIDS -->
+          <div class="domain-card">
+            <div class="domain-header kids">🧒 KIDS</div>
+            <div class="domain-body">
+              <div class="scenario" onclick="triggerKids('soccer')">
+                <div class="scenario-title">⚽ Junior Soccer (Alex, 9)</div>
+                <div class="scenario-desc">Saturday | $45 | safety: cleats + shin guards</div>
+                <span class="hitl-tag">HITL: parental consent (COPPA)</span>
+              </div>
+              <div class="scenario" onclick="triggerKids('robotics')">
+                <div class="scenario-title">🤖 Robotics Club (Jordan, 11)</div>
+                <div class="scenario-desc">Thursday | $60 | adult supervision required</div>
+                <span class="hitl-tag">HITL: parental consent + safety flags</span>
+              </div>
+              <div class="scenario" onclick="triggerKids('arts')">
+                <div class="scenario-title">🎨 Arts Workshop (Sam, 7)</div>
+                <div class="scenario-desc">Wednesday | $25 | no special requirements</div>
+                <span class="hitl-tag">HITL: parental consent required</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Run history -->
+    <div class="card">
+      <div class="card-header">
+        <h2>📋 Run History</h2>
+        <span id="run-count" style="font-size:.75rem;color:var(--muted);margin-left:auto">0 runs</span>
+      </div>
+      <div id="run-log" class="card-body" style="padding:0">
+        <div class="empty-state">No runs yet — trigger a workflow above.</div>
+      </div>
+    </div>
+
+    <!-- Live feed -->
+    <div class="card">
+      <div class="card-header"><h2>📡 Live Events</h2></div>
+      <div class="card-body" style="padding:10px 14px">
+        <div id="live-feed">
+          <div class="feed-line" style="color:var(--muted)">Waiting for WebSocket…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: HITL queue -->
+  <div>
+    <div class="card" style="position:sticky;top:20px">
+      <div class="card-header">
+        <h2>⏳ HITL Approval Queue</h2>
+        <span id="queue-count" style="font-size:.75rem;color:var(--muted);margin-left:auto">0 pending</span>
+      </div>
+      <div class="card-body" style="padding:12px">
+        <div id="hitl-list">
+          <div class="empty-state">
+            No pending approvals.<br>Trigger a workflow to see HITL requests here.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';   // same origin
+let ws = null;
+let wsRetry = 0;
+const runMap = {};
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/api/pl/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('ws-dot').classList.add('connected');
+    document.getElementById('ws-label').textContent = 'live';
+    wsRetry = 0;
+    feedLine('WebSocket connected');
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').classList.remove('connected');
+    document.getElementById('ws-label').textContent = 'reconnecting…';
+    wsRetry = Math.min(wsRetry + 1, 8);
+    setTimeout(connectWS, Math.pow(2, wsRetry) * 200);
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleMsg(msg);
+    feedLine(`${msg.type} ${msg.product_line || msg.run_id || ''} ${msg.request_id ? '→ ' + msg.request_id.slice(0,8) : ''}`);
+  };
+}
+
+function handleMsg(msg) {
+  if (msg.type === 'hitl_pending' || msg.type === 'hitl_resolved' || msg.type === 'run_completed') {
+    refreshHITL();
+  }
+  if (msg.type === 'run_started') {
+    runMap[msg.run_id] = { ...msg, status: 'running', started_at: Date.now() / 1000 };
+    renderRuns();
+  }
+  if (msg.type === 'run_completed') {
+    if (runMap[msg.run_id]) {
+      runMap[msg.run_id].status = msg.status;
+      runMap[msg.run_id].result = msg.result;
+    }
+    renderRuns();
+    if (msg.status === 'completed') toast('✅ Run completed', 'var(--green)');
+    if (msg.status === 'failed') toast('❌ Run failed', 'var(--red)');
+  }
+  if (msg.type === 'hitl_resolved') {
+    const verb = msg.approved ? '✅ Approved' : '❌ Rejected';
+    toast(`${verb} by ${msg.reviewer_id || 'reviewer'}`, msg.approved ? 'var(--green)' : 'var(--red)');
+  }
+}
+
+// ── HITL refresh ────────────────────────────────────────────────────────────
+async function refreshHITL() {
+  const res = await fetch(`${API}/api/pl/hitl/pending`);
+  const items = await res.json();
+  const el = document.getElementById('hitl-list');
+  const countEl = document.getElementById('queue-count');
+  countEl.textContent = `${items.length} pending`;
+
+  if (!items.length) {
+    el.innerHTML = '<div class="empty-state">No pending approvals.<br>Trigger a workflow to see HITL requests here.</div>';
+    return;
+  }
+
+  el.innerHTML = items.map(r => `
+    <div class="hitl-item ${r.product_line}">
+      <div class="hitl-top">
+        <span class="hitl-pl ${r.product_line}">${r.product_line.toUpperCase()}</span>
+        <div class="hitl-meta">
+          <div class="hitl-action">${r.action.replace(/_/g,' ')}</div>
+          <div class="hitl-agent">${r.agent_id} · ${r.age_seconds}s ago · ${r.reviewer_group}</div>
+        </div>
+      </div>
+      <div class="hitl-summary">${r.summary}</div>
+      <div class="hitl-channel">📬 → ${r.channel}</div>
+      <div class="hitl-actions">
+        <button class="btn btn-approve" onclick="approve('${r.request_id}')">✓ Approve</button>
+        <button class="btn btn-reject"  onclick="reject('${r.request_id}')">✗ Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function approve(id) {
+  await fetch(`${API}/api/pl/hitl/${id}/approve`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ reviewer_id: 'demo-reviewer@agentforge.dev', reason: 'Approved via demo UI' })
+  });
+  refreshHITL();
+}
+
+async function reject(id) {
+  await fetch(`${API}/api/pl/hitl/${id}/reject`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ reviewer_id: 'demo-reviewer@agentforge.dev', reason: 'Rejected via demo UI' })
+  });
+  refreshHITL();
+}
+
+// ── Trigger scenarios ────────────────────────────────────────────────────────
+const SCENARIOS = {
+  // Health
+  critical: {
+    patient_id:'P-DEMO-CRITICAL', age:67,
+    symptoms:['chest pain','difficulty breathing'],
+    medical_history:['diabetes','COPD'], allergies:[]
+  },
+  medium: {
+    patient_id:'P-DEMO-MEDIUM', age:34,
+    symptoms:['severe pain','persistent cough'],
+    medical_history:['hypertension'], allergies:['penicillin']
+  },
+  low: {
+    patient_id:'P-DEMO-LOW', age:28,
+    symptoms:['mild headache'], medical_history:[], allergies:[]
+  },
+  // Investment
+  large_buy: {
+    account_id:'ACC-DEMO-001', total_value_usd:250000,
+    holdings:{'AAPL':80000,'MSFT':60000,'BND':50000,'VTI':60000},
+    trade_type:'buy', ticker:'BND', amount_usd:25000,
+    rationale:'Rebalance equity-heavy portfolio toward fixed income'
+  },
+  critical_sell: {
+    account_id:'ACC-DEMO-001', total_value_usd:250000,
+    holdings:{'AAPL':80000,'MSFT':60000,'BND':50000,'VTI':60000},
+    trade_type:'sell', ticker:'AAPL', amount_usd:35000,
+    rationale:'Trim overweight AAPL — exceeds IPS limit'
+  },
+  small_buy: {
+    account_id:'ACC-DEMO-001', total_value_usd:250000,
+    holdings:{'AAPL':80000,'MSFT':60000,'BND':50000,'VTI':60000},
+    trade_type:'buy', ticker:'VTI', amount_usd:1500,
+    rationale:'Minor top-up — within rebalance band'
+  },
+  // Kids
+  soccer: {
+    child_name:'Alex', child_age:9, allergies:[],
+    existing_schedule:[], preferences:['sports'], activity_index:0
+  },
+  robotics: {
+    child_name:'Jordan', child_age:11, allergies:[],
+    existing_schedule:[], preferences:['technology'], activity_index:2
+  },
+  arts: {
+    child_name:'Sam', child_age:7, allergies:[],
+    existing_schedule:[], preferences:['arts'], activity_index:1
+  },
+};
+
+async function triggerHealth(scenario) {
+  const body = SCENARIOS[scenario];
+  const res = await fetch(`${API}/api/pl/health/trigger`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  runMap[data.run_id] = { run_id: data.run_id, product_line:'health', status:'running', started_at:Date.now()/1000 };
+  renderRuns();
+  toast(`🏥 Health workflow started`, 'var(--health)');
+  setTimeout(refreshHITL, 600);
+}
+
+async function triggerInvestment(scenario) {
+  const body = SCENARIOS[scenario];
+  const res = await fetch(`${API}/api/pl/investment/trigger`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  runMap[data.run_id] = { run_id: data.run_id, product_line:'investment', status:'running', started_at:Date.now()/1000 };
+  renderRuns();
+  toast(`📈 Investment workflow started`, 'var(--inv)');
+  setTimeout(refreshHITL, 600);
+}
+
+async function triggerKids(scenario) {
+  const body = SCENARIOS[scenario];
+  const res = await fetch(`${API}/api/pl/kids/trigger`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  runMap[data.run_id] = { run_id: data.run_id, product_line:'kids', status:'running', started_at:Date.now()/1000 };
+  renderRuns();
+  toast(`🧒 Kids workflow started`, 'var(--kids)');
+  setTimeout(refreshHITL, 600);
+}
+
+// ── Run history ──────────────────────────────────────────────────────────────
+function renderRuns() {
+  const el = document.getElementById('run-log');
+  const runs = Object.values(runMap).sort((a,b)=>(b.started_at||0)-(a.started_at||0));
+  document.getElementById('run-count').textContent = `${runs.length} runs`;
+  if (!runs.length) {
+    el.innerHTML = '<div class="empty-state">No runs yet — trigger a workflow above.</div>';
+    return;
+  }
+  const plColor = { health:'var(--health)', investment:'var(--inv)', kids:'var(--kids)' };
+  el.innerHTML = runs.slice(0,20).map(r => `
+    <div class="run-item">
+      <div class="run-dot ${r.status}"></div>
+      <div class="run-info">
+        <span style="color:${plColor[r.product_line]};font-weight:600">${r.product_line?.toUpperCase()}</span>
+        <span class="run-id"> ${r.run_id}</span>
+      </div>
+      <span style="font-size:.7rem;color:var(--muted)">${r.status}</span>
+    </div>
+  `).join('');
+}
+
+// ── Live feed ────────────────────────────────────────────────────────────────
+function feedLine(text) {
+  const el = document.getElementById('live-feed');
+  const ts = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.className = 'feed-line';
+  line.innerHTML = `<span>${ts}</span> ${text}`;
+  el.insertBefore(line, el.firstChild);
+  while (el.children.length > 40) el.removeChild(el.lastChild);
+}
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+let _toastT;
+function toast(msg, color='var(--accent)') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  el.style.borderColor = color;
+  clearTimeout(_toastT);
+  _toastT = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+// ── Init ────────────────────────────────────────────────────────────────────
+connectWS();
+refreshHITL();
+setInterval(refreshHITL, 5000);
+</script>
+</body>
+</html>
