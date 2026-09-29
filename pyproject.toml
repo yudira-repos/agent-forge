@@ -66,11 +66,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/agentforge-oss/agentforge"
-Documentation = "https://agentforge.readthedocs.io"
-Repository = "https://github.com/agentforge-oss/agentforge"
-"Bug Tracker" = "https://github.com/agentforge-oss/agentforge/issues"
-Changelog = "https://github.com/agentforge-oss/agentforge/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/yudira-repos/agent-forge"
+Documentation = "https://github.com/yudira-repos/agent-forge#readme"
+Repository = "https://github.com/yudira-repos/agent-forge"
+"Bug Tracker" = "https://github.com/yudira-repos/agent-forge/issues"
+Changelog = "https://github.com/yudira-repos/agent-forge/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]

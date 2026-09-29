@@ -91,3 +91,59 @@ class TestAuditTrail:
         stats = self.trail.stats()
         assert stats["total_events"] == 4
         assert stats["by_agent"]["agent-1"] == 3
+
+
+class TestHashChain:
+    def _run(self, hmac_key=None):
+        sink = InMemoryAuditSink()
+        logger = AuditLogger(sinks=[sink], hmac_key=hmac_key)
+        for event_type in (
+            EventType.AGENT_STARTED,
+            EventType.TOOL_INVOKED,
+            EventType.TOOL_COMPLETED,
+        ):
+            logger.log(event_type, "agent-1", "run-1", payload={"n": 1})
+        return sink, AuditTrail(sink)
+
+    def test_intact_chain_verifies(self):
+        _, trail = self._run()
+        result = trail.verify_chain("run-1")
+        assert result.valid and result.checked == 3
+
+    def test_each_event_hashes_previous(self):
+        sink, _ = self._run()
+        e1, e2, _ = sink.events
+        assert e1.previous_hash is None
+        assert e2.previous_hash == e1.event_hash
+
+    def test_edited_payload_is_detected(self):
+        sink, trail = self._run()
+        sink.events[1].payload["n"] = 999
+        result = trail.verify_chain("run-1")
+        assert not result.valid and result.broken_at == 1
+
+    def test_deleted_event_is_detected(self):
+        sink, trail = self._run()
+        del sink.events[1]
+        result = trail.verify_chain("run-1")
+        assert not result.valid and result.broken_at == 1
+
+    def test_reordered_events_are_detected(self):
+        sink, trail = self._run()
+        sink.events[1], sink.events[2] = sink.events[2], sink.events[1]
+        assert not trail.verify_chain("run-1").valid
+
+    def test_rehashed_forgery_fails_with_hmac(self):
+        key = b"audit-secret"
+        sink, trail = self._run(hmac_key=key)
+        assert trail.verify_chain("run-1", hmac_key=key).valid
+        # Attacker edits an event and recomputes plain SHA-256 hashes
+        forged = sink.events[1]
+        forged.payload["n"] = 999
+        forged.event_hash = forged.compute_hash()
+        assert not trail.verify_chain("run-1", hmac_key=key).valid
+
+    def test_hash_is_in_serialized_event(self):
+        sink, _ = self._run()
+        d = sink.events[0].to_dict()
+        assert len(d["event_hash"]) == 64 and d["previous_hash"] is None

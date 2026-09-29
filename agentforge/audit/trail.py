@@ -33,6 +33,16 @@ class AuditQuery:
     limit: int = 1000
 
 
+@dataclass
+class ChainVerification:
+    """Result of verifying a correlation chain's integrity."""
+
+    valid: bool
+    checked: int
+    broken_at: int | None = None  # index of the first bad event, if any
+    reason: str | None = None
+
+
 class AuditTrail:
     """
     Queryable, replayable view over captured audit events.
@@ -105,6 +115,31 @@ class AuditTrail:
                 }
             )
         return steps
+
+    def verify_chain(self, correlation_id: str, hmac_key: bytes | None = None) -> ChainVerification:
+        """
+        Verify the hash chain for one correlation id, in write order.
+
+        Detects edited events (hash mismatch), deleted or reordered events
+        (link mismatch), and a chain that does not start at a root event.
+        Use the same ``hmac_key`` the logger was created with.
+        """
+        events = [e for e in self._sink.events if e.correlation_id == correlation_id]
+        prev: AuditEvent | None = None
+        for i, event in enumerate(events):
+            if event.compute_hash(hmac_key) != event.event_hash:
+                return ChainVerification(False, i + 1, i, "event content does not match its hash")
+            expected_prev_hash = prev.event_hash if prev else None
+            expected_prev_id = prev.event_id if prev else None
+            if (
+                event.previous_hash != expected_prev_hash
+                or event.previous_event_id != expected_prev_id
+            ):
+                return ChainVerification(
+                    False, i + 1, i, "link to previous event is broken (missing or reordered)"
+                )
+            prev = event
+        return ChainVerification(True, len(events))
 
     def violations(self, since: float | None = None) -> list[AuditEvent]:
         """Return all DENY and HITL events (for compliance reporting)."""

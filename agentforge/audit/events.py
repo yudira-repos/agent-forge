@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -86,8 +89,12 @@ class AuditEvent:
     severity: EventSeverity
     payload: dict[str, Any]
     metadata: dict[str, Any]
-    # Chained hash for tamper-evidence (each event hashes the previous event_id)
+    # Link to the previous event in the same correlation chain
     previous_event_id: str | None
+    # SHA-256 (or HMAC-SHA256) of the previous event; None for the first event
+    previous_hash: str | None = None
+    # Hash over this event's canonical content, including ``previous_hash``
+    event_hash: str = ""
 
     @classmethod
     def create(
@@ -99,8 +106,10 @@ class AuditEvent:
         severity: EventSeverity = EventSeverity.INFO,
         metadata: dict[str, Any] | None = None,
         previous_event_id: str | None = None,
+        previous_hash: str | None = None,
+        hmac_key: bytes | None = None,
     ) -> "AuditEvent":
-        return cls(
+        event = cls(
             event_id=str(uuid.uuid4()),
             event_type=event_type,
             agent_id=agent_id,
@@ -110,7 +119,29 @@ class AuditEvent:
             payload=payload or {},
             metadata=metadata or {},
             previous_event_id=previous_event_id,
+            previous_hash=previous_hash,
         )
+        event.event_hash = event.compute_hash(hmac_key)
+        return event
+
+    def canonical_bytes(self) -> bytes:
+        """Deterministic serialization of every field except ``event_hash``."""
+        body = self.to_dict()
+        body.pop("event_hash", None)
+        return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+    def compute_hash(self, hmac_key: bytes | None = None) -> str:
+        """
+        Hash this event's canonical content.
+
+        Without a key this is plain SHA-256, which detects accidental or
+        partial tampering. With ``hmac_key`` it is HMAC-SHA256, so an attacker
+        who can rewrite the log cannot recompute a valid chain without the key.
+        """
+        data = self.canonical_bytes()
+        if hmac_key is not None:
+            return hmac.new(hmac_key, data, hashlib.sha256).hexdigest()
+        return hashlib.sha256(data).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +154,8 @@ class AuditEvent:
             "payload": self.payload,
             "metadata": self.metadata,
             "previous_event_id": self.previous_event_id,
+            "previous_hash": self.previous_hash,
+            "event_hash": self.event_hash,
         }
 
     def __repr__(self) -> str:

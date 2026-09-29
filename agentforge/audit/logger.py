@@ -74,8 +74,11 @@ class AuditLogger:
     Central audit logger for AgentForge.
 
     Emits structured AuditEvents to one or more sinks.  Maintains a
-    per-correlation chain so each event links to the previous one —
-    creating a tamper-evident linked list of events per workflow run.
+    per-correlation hash chain: each event stores the hash of the previous
+    event, and its own hash covers that value. Editing, deleting, or
+    reordering any event breaks every hash after it, which
+    ``AuditTrail.verify_chain`` detects. Pass ``hmac_key`` so the chain
+    cannot be recomputed by someone without the key.
 
     Example::
 
@@ -88,10 +91,11 @@ class AuditLogger:
         )
     """
 
-    def __init__(self, sinks: list[AuditSink] | None = None) -> None:
+    def __init__(self, sinks: list[AuditSink] | None = None, hmac_key: bytes | None = None) -> None:
         self._sinks = sinks or [ConsoleAuditSink()]
-        # Track last event_id per correlation_id for chaining
-        self._chain_heads: dict[str, str] = {}
+        self._hmac_key = hmac_key
+        # Track (last event_id, last event_hash) per correlation_id for chaining
+        self._chain_heads: dict[str, tuple[str, str]] = {}
 
     def add_sink(self, sink: AuditSink) -> None:
         self._sinks.append(sink)
@@ -106,7 +110,7 @@ class AuditLogger:
         metadata: dict[str, Any] | None = None,
     ) -> AuditEvent:
         """Emit a single audit event to all registered sinks."""
-        previous = self._chain_heads.get(correlation_id)
+        head = self._chain_heads.get(correlation_id)
         event = AuditEvent.create(
             event_type=event_type,
             agent_id=agent_id,
@@ -114,9 +118,11 @@ class AuditLogger:
             payload=payload,
             severity=severity,
             metadata=metadata,
-            previous_event_id=previous,
+            previous_event_id=head[0] if head else None,
+            previous_hash=head[1] if head else None,
+            hmac_key=self._hmac_key,
         )
-        self._chain_heads[correlation_id] = event.event_id
+        self._chain_heads[correlation_id] = (event.event_id, event.event_hash)
         for sink in self._sinks:
             sink.write(event)
         return event

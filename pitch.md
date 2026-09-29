@@ -144,7 +144,7 @@ These are the indicators that AgentForge is hitting product-market fit:
 
 AgentForge is open source under Apache 2.0.
 
-- ⭐ Star the repo: [github.com/agentforge-oss/agentforge](https://github.com/agentforge-oss/agentforge)
+- ⭐ Star the repo: [github.com/yudira-repos/agent-forge](https://github.com/yudira-repos/agent-forge)
 - 🤝 Contribute a compliance profile for your industry
 - 📣 Share with any team deploying AI agents in production
 - 💬 Open an issue describing your governance gap — we'll build it

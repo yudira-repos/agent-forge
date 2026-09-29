@@ -6,7 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- README badges, install steps, and project URLs now point to this repository; removed PyPI and Read the Docs links (not published)
+- Stopped tracking the local SQLite journal file
+
 ### Added
+- Audit: SHA-256 hash chain per run (`previous_hash`, `event_hash`), optional HMAC-SHA256 key, and `AuditTrail.verify_chain()` to detect edited, deleted, or reordered events
 - Tier 1: PostgreSQL backend (SQLAlchemy + Alembic migrations)
 - Tier 1: Authentication (API keys, JWT, OAuth2/SSO)
 - Tier 1: Docker + docker-compose deployment

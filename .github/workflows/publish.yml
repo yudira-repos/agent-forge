@@ -1,9 +1,9 @@
 name: Publish to PyPI
 
+# Manual only: the "agentforge" name on PyPI belongs to another project.
+# Choose an available distribution name in pyproject.toml before publishing.
 on:
-  push:
-    tags:
-      - "v*.*.*"   # triggers on v0.1.0, v1.2.3, etc.
+  workflow_dispatch:
 
 permissions:
   contents: read

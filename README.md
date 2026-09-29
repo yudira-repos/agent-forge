@@ -2,11 +2,11 @@
 
 **Open Enterprise Agent Framework**
 
-[![CI](https://github.com/agentforge-oss/agentforge/actions/workflows/ci.yml/badge.svg)](https://github.com/agentforge-oss/agentforge/actions)
-[![PyPI](https://img.shields.io/pypi/v/agentforge)](https://pypi.org/project/agentforge)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://pypi.org/project/agentforge)
+[![CI](https://github.com/yudira-repos/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/yudira-repos/agent-forge/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-readthedocs-blue)](https://agentforge.readthedocs.io)
+
+> Status: alpha. Not published to PyPI; install from source (see Quick Start).
 
 AgentForge is a production-grade framework for building, governing, and auditing AI agents in enterprise environments. It fills the gap between **LLM SDKs** (which handle model calls) and **enterprise requirements** (identity, governance, compliance, human oversight) that every serious production deployment needs.
 
@@ -22,7 +22,7 @@ Most agent frameworks are optimised for demos. AgentForge is optimised for produ
 |---|---|---|
 | Who is this agent? | String in a prompt | Signed identity + RBAC |
 | Can this agent do that? | Nothing stops it | Authority scopes + policy engine |
-| What did the agent do? | Maybe some print statements | Tamper-evident audit trail |
+| What did the agent do? | Maybe some print statements | Hash-chained, verifiable audit trail |
 | Sensitive action? | Hope for the best | HITL approval workflow |
 | SOC 2 / HIPAA / GDPR? | Manual paperwork | Built-in compliance profiles |
 | Which LLM? | Hard-coded | Swap adapter in one line |
@@ -50,7 +50,7 @@ Most agent frameworks are optimised for demos. AgentForge is optimised for produ
 │       │             │               │                 │          │
 │  ┌────▼─────────────▼───────────────▼─────────────────▼───────┐ │
 │  │                    Auditability SDK                          │ │
-│  │           Structured Events · Tamper-evident Chain          │ │
+│  │           Structured Events · Hash-chained Log              │ │
 │  │           Replay · Compliance Export · OTEL Spans           │ │
 │  └──────────────────────────────────────────────────────────────┘ │
 │                                                                   │
@@ -141,7 +141,7 @@ elif decision.is_denied:
 ```
 
 ### 📊 Auditability SDK
-Every agent action, tool call, policy decision, and HITL event is recorded as a **tamper-evident, chained audit event**. Each event links to the previous one via its `previous_event_id` — making silent deletion detectable. Events are persisted to SQLite and survive server restarts.
+Every agent action, tool call, policy decision, and HITL event is recorded as a **hash-chained audit event**. Each event stores the SHA-256 hash of the previous event in its run, and its own hash covers that value, so editing, deleting, or reordering any event breaks the chain. `AuditTrail.verify_chain()` checks a run and reports the first broken event. Pass an `hmac_key` to use HMAC-SHA256, so someone who can rewrite the log still cannot forge a valid chain without the key. (The UI console persists events and their links to SQLite; hash verification runs in the SDK.)
 
 ```python
 from agentforge.audit import AuditLogger, AuditTrail, EventType
@@ -152,6 +152,9 @@ logger = AuditLogger(sinks=[sink, FileAuditSink("./audit.log")])
 trail = AuditTrail(sink)
 
 logger.tool_invoked("agent-001", correlation_id, tool="send_email")
+
+# Verify nothing was edited, deleted, or reordered
+assert trail.verify_chain(correlation_id).valid
 
 # Replay the full decision trail for a workflow run
 steps = trail.replay(correlation_id)
@@ -248,7 +251,7 @@ A full-stack dashboard for non-technical and technical users — live HITL appro
 
 ```bash
 # 1. Install dependencies
-pip install "agentforge[dev]" fastapi uvicorn
+pip install -e ".[dev]" fastapi uvicorn   # from a clone of this repo
 
 # 2. Start the console
 python ui/backend/main.py
@@ -326,7 +329,7 @@ flowchart TB
 
 | Mode | Best for | What you use |
 |---|---|---|
-| **Embedded SDK** | Agent code runs in your app | `pip install agentforge` — registry, governance, audit, HITL in-process |
+| **Embedded SDK** | Agent code runs in your app | `pip install -e .` from source — registry, governance, audit, HITL in-process |
 | **Remote API** | Any language / microservices | REST endpoints for agents, HITL, audit, workflows |
 | **Hybrid** | Production | SDK in agent services + deployed console for human reviewers |
 
@@ -408,13 +411,15 @@ async def transfer_funds(amount: float, payee: str, run_id: str):
 ## Quick Start
 
 ```bash
-pip install agentforge
+git clone https://github.com/yudira-repos/agent-forge
+cd agent-forge
+pip install -e .
 
 # With your preferred LLM provider:
-pip install "agentforge[anthropic]"
-pip install "agentforge[openai]"
-pip install "agentforge[vertex]"
-pip install "agentforge[all]"       # all providers
+pip install -e ".[anthropic]"
+pip install -e ".[openai]"
+pip install -e ".[vertex]"
+pip install -e ".[all]"       # all providers
 ```
 
 ```python
@@ -477,7 +482,7 @@ The health check endpoint is `/health`. Target port is `8000`.
 
 **Scopes narrow, never widen.** Delegation tokens can only restrict an agent's authority — a delegating agent cannot grant permissions it doesn't hold itself.
 
-**Audit first.** Every component emits structured events to the `AuditLogger`. The logger is pluggable (console, file, your SIEM). The `AuditTrail` class provides tamper-evidence through chained event IDs.
+**Audit first.** Every component emits structured events to the `AuditLogger`. The logger is pluggable (console, file, your SIEM). Events are hash-chained per run, and `AuditTrail.verify_chain()` detects any edit, deletion, or reordering.
 
 **Persistence by default.** All runs, spans, HITL decisions, and audit events are persisted to SQLite and survive server restarts. Historical metrics are DB-merged with live in-memory data so dashboards never show stale-then-blank transitions.
 
@@ -504,8 +509,8 @@ The health check endpoint is `/health`. Target port is `8000`.
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and open an issue before submitting a large PR.
 
 ```bash
-git clone https://github.com/agentforge-oss/agentforge
-cd agentforge
+git clone https://github.com/yudira-repos/agent-forge
+cd agent-forge
 pip install -e ".[dev]"
 pytest tests/ -v
 ```

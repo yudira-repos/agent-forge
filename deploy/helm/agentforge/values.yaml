@@ -6,7 +6,7 @@
 replicaCount: 3
 
 image:
-  repository: ghcr.io/agentforge-oss/agentforge
+  repository: ghcr.io/yudira-repos/agent-forge
   pullPolicy: IfNotPresent
   tag: "latest"
 

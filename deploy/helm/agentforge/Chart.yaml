@@ -4,12 +4,12 @@ description: Open Enterprise Agent Framework — governance, identity, audit, an
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/agentforge-oss/agentforge
+home: https://github.com/yudira-repos/agent-forge
 sources:
-  - https://github.com/agentforge-oss/agentforge
+  - https://github.com/yudira-repos/agent-forge
 maintainers:
   - name: AgentForge Contributors
-    url: https://github.com/agentforge-oss/agentforge
+    url: https://github.com/yudira-repos/agent-forge
 keywords:
   - ai-agents
   - governance

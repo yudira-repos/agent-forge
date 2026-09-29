@@ -10,7 +10,7 @@
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-Report privately via GitHub's [Security Advisories](https://github.com/agentforge-oss/agentforge/security/advisories/new) feature (Settings → Security → Advisories → New draft advisory).
+Report privately via GitHub's [Security Advisories](https://github.com/yudira-repos/agent-forge/security/advisories/new) feature (Settings → Security → Advisories → New draft advisory).
 
 Include:
 - A description of the vulnerability and its potential impact
